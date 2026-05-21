@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(New-Item -ItemType Directory -Path src\\\\modules -Force)",
+      "PowerShell(Move-Item src\\\\cats src\\\\modules\\\\cats)",
+      "PowerShell(Move-Item src\\\\user src\\\\modules\\\\user)",
+      "PowerShell(npx tsc --noEmit 2>&1)"
+    ]
+  }
+}
