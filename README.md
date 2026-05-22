@@ -387,9 +387,11 @@ import {
   Catch,
   ExceptionFilter,
   HttpException,
+  Injectable,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 
+@Injectable() // 让 Nest IoC 容器接管：才能注入依赖、走 APP_FILTER 注册、被 @UseFilters(类) 复用
 @Catch(HttpException) // 只捕获 HttpException 及其子类（NotFoundException、BadRequestException 等）
 export class InterceptorExceptionFilter implements ExceptionFilter {
   // catch 方法是固定签名：异常对象 + 上下文宿主
@@ -411,6 +413,14 @@ export class InterceptorExceptionFilter implements ExceptionFilter {
 ```
 
 > 💡 **小提示：** 想一锅端**所有**异常（包括非 HTTP 的、原生 `Error`），把 `@Catch(HttpException)` 改成 `@Catch()`（不传参数），并把 `exception` 类型放宽，自己处理状态码兜底。
+
+> 🔑 **为什么要加 `@Injectable()`？**
+> `@Injectable()` 是 Nest IoC 容器的「上岗证」——贴了它，类才能被容器识别、实例化和注入依赖。过滤器加上它的核心理由：
+> - **支持 DI**：构造函数能注入 `Logger` / `ConfigService` / 数据库等任何 Provider
+> - **走 `APP_FILTER` 全局注册必须**：`{ provide: APP_FILTER, useClass: X }` 走 `useClass`，X 必须是合法 Provider
+> - **走 `@UseFilters(类)` 局部使用必须**：传类时由容器实例化，没贴 `@Injectable()` 会报错
+>
+> 唯一可省略的场景是「永远只用 `new` 实例化、且不需要任何 DI」，但后期想加日志/配置就要返工。**0 成本好习惯，建议永远加上**。同样的逻辑适用于**拦截器、守卫、管道**。
 
 #### 三种注册方式
 
@@ -454,15 +464,26 @@ export class AppModule {}
 
 ##### ✅ 方式 C：局部使用
 
+只想给某个 Controller 或某个方法加过滤器，用 `@UseFilters()` 装饰器贴上去即可：
+
 ```typescript
-@UseFilters(new InterceptorExceptionFilter()) // 贴在 Controller 上：作用于整个 Controller
+import { Controller, Get, UseFilters } from '@nestjs/common';
+import { InterceptorExceptionFilter } from 'src/exception/error-exception.filter';
+
+// 贴在 Controller 上：作用于整个 Controller 的所有路由
+@UseFilters(InterceptorExceptionFilter)
 @Controller('cats')
 export class CatsController {
+  // 贴在方法上：仅作用于这个路由
   @Get()
-  @UseFilters(InterceptorExceptionFilter) // 贴在方法上：仅作用于这个路由
+  @UseFilters(InterceptorExceptionFilter)
   findAll() { /* ... */ }
 }
 ```
+
+> 💡 **传类 vs 传实例：**
+> - ✅ **推荐** `@UseFilters(InterceptorExceptionFilter)` —— 传**类**，由 Nest 容器实例化，**支持 DI**（构造函数能注入 `Logger` / `ConfigService` 等），且**单例复用**
+> - ⚠️ `@UseFilters(new InterceptorExceptionFilter())` —— 传**实例**，自己 `new`，**拿不到 DI**，每次声明都是新实例，仅适合无依赖的纯逻辑过滤器
 
 #### 🆚 两种全局注册方式的优缺点
 
@@ -583,6 +604,14 @@ export class InterceptorInterceptor implements NestInterceptor {
 }
 ```
 
+> 🔑 **为什么要加 `@Injectable()`？**
+> 跟过滤器同理，`@Injectable()` 是让 Nest IoC 容器接管这个类的「上岗证」。拦截器加上它的核心理由：
+> - **支持 DI**：构造函数能注入 `Logger` / `ConfigService` / 数据库等任何 Provider，写日志、上报监控、读配置都靠这个
+> - **走 `APP_INTERCEPTOR` 全局注册必须**：`{ provide: APP_INTERCEPTOR, useClass: X }` 走 `useClass`，X 必须是合法 Provider
+> - **走 `@UseInterceptors(类)` 局部使用必须**：传类时由容器实例化，没贴 `@Injectable()` 会报错
+>
+> 唯一可省略的场景是「永远只用 `app.useGlobalInterceptors(new X())` 注册、且不依赖任何 Service」，但这种纯转换型拦截器在真实项目里很少见。**建议永远加上**——0 成本，且未来加日志/上报时无需重构。
+
 #### 三种注册方式
 
 跟过滤器几乎一一对应：
@@ -627,6 +656,29 @@ import { InterceptorInterceptor } from './exception/exception.filter';
 })
 export class AppModule {}
 ```
+
+##### ✅ 方式 C：局部使用
+
+只想给某个 Controller 或某个方法加拦截器，用 `@UseInterceptors()` 装饰器贴上去即可：
+
+```typescript
+import { Controller, Get, UseInterceptors } from '@nestjs/common';
+import { InterceptorInterceptor } from 'src/exception/exception.filter';
+
+// 贴在 Controller 上：作用于整个 Controller 的所有路由
+@UseInterceptors(InterceptorInterceptor)
+@Controller('cats')
+export class CatsController {
+  // 贴在方法上：仅作用于这个路由
+  @Get()
+  @UseInterceptors(InterceptorInterceptor)
+  findAll() { /* ... */ }
+}
+```
+
+> 💡 **传类 vs 传实例：**
+> - ✅ **推荐** `@UseInterceptors(InterceptorInterceptor)` —— 传**类**，由 Nest 容器实例化，**支持 DI**（构造函数能注入 `Logger` / `ConfigService` 等），且**单例复用**
+> - ⚠️ `@UseInterceptors(new InterceptorInterceptor())` —— 传**实例**，自己 `new`，**拿不到 DI**，每次声明都是新实例，仅适合无依赖的纯转换拦截器
 
 #### 🆚 两种全局注册方式的优缺点
 

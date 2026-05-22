@@ -42,3 +42,18 @@ export class InterceptorExceptionFilter implements ExceptionFilter {
     });
   }
 }
+
+export class localErrorFilter implements ExceptionFilter {
+  catch(exception: HttpException, host: ArgumentsHost): void {
+    const ctx = host.switchToHttp();
+    const request = ctx.getRequest<Request>();
+    const response = ctx.getResponse<Response>();
+    response.status(exception.getStatus()).json({
+      timestamp: new Date().toISOString(),
+      path: request.url,
+      message: exception.message + '这是局部错误过滤器后缀',
+      code: exception.getStatus(),
+      success: false,
+    });
+  }
+}

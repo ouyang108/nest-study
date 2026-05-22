@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, Injectable } from '@nestjs/common';
 import { CreateCatDto } from './dto/create-cat.dto';
 import { UpdateCatDto } from './dto/update-cat.dto';
 // 引入 UserService 类型，用于依赖注入（路径已更新到 modules/ 下）
@@ -23,6 +23,8 @@ export class CatsService {
   }
 
   async findAll() {
+    // 抛出错误
+    // throw new HttpException('这是局部错误过滤器', 400);
     // 示例：调用 UserService 的方法
     const users = this.userService.findAll();
     const message = this.configService.get<string>('PORT'); // 从配置服务中获取 JWT_SECRET 的值

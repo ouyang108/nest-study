@@ -64,3 +64,25 @@ export class InterceptorInterceptor implements NestInterceptor {
     );
   }
 }
+
+@Injectable()
+export class LocalExceptionFilter implements NestInterceptor {
+  intercept(
+    context: ExecutionContext,
+    next: CallHandler,
+  ): Observable<ResponseBody> {
+    const ctx = context.switchToHttp();
+    const request = ctx.getRequest<Request>();
+
+    return next.handle().pipe(
+      map((data: ControllerResult) => ({
+        timestamp: new Date().toISOString(),
+        path: request.url,
+        message: data?.message ?? '请求成功 + 这是局部响应拦截器',
+        code: data?.code ?? 200,
+        success: true,
+        data: transformBigInt(data?.data) ?? null,
+      })),
+    );
+  }
+}
