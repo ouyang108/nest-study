@@ -5,7 +5,10 @@
       "PowerShell(Move-Item src\\\\cats src\\\\modules\\\\cats)",
       "PowerShell(Move-Item src\\\\user src\\\\modules\\\\user)",
       "PowerShell(npx tsc --noEmit 2>&1)",
-      "Bash(powershell -Command \"\\(Get-Content e:\\\\daima\\\\gitee\\\\nest-study\\\\README.md | Measure-Object -Line\\).Lines\")"
+      "Bash(powershell -Command \"\\(Get-Content e:\\\\daima\\\\gitee\\\\nest-study\\\\README.md | Measure-Object -Line\\).Lines\")",
+      "Bash(awk 'NR<=1019 { if\\(/^```/\\){inblock=!inblock; next} if\\(inblock && /^#/\\) print NR\": \"$0 }' \"e:/daima/gitee/nest-study/README.md\")",
+      "Bash(awk 'BEGIN{in_block=0} NR==1{print \"# NestJS 篇\"; print \"\"} {if\\(/^```/\\) in_block=!in_block; if\\(NR<=1019 && !in_block && /^#+ /\\) sub\\(/^#/,\"##\"\\); print}' README.md)",
+      "Bash(mv README.md.new README.md)"
     ]
   }
 }

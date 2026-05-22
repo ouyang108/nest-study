@@ -1,8 +1,10 @@
-# 如何理解 NestJS 中 Service 与 Controller 的区别
+# NestJS 篇
+
+## 如何理解 NestJS 中 Service 与 Controller 的区别
 
 > 🍽️ **饭店类比：** Controller 是「前台服务员」，Service 是「后厨主厨」。前台负责接待客人，后厨专注做菜，分工明确才不会乱。
 
-## Controller 控制器：前台服务员
+### Controller 控制器：前台服务员
 
 **唯一职责：** 处理 HTTP 请求，把结果返回给客户。
 
@@ -27,7 +29,7 @@ export class BooksController {
 }
 ```
 
-## Service 服务：后厨主厨
+### Service 服务：后厨主厨
 
 **唯一职责：** 处理核心业务逻辑（搬砖、搞数据、算账）。
 
@@ -60,7 +62,7 @@ export class BooksService {
 
 ---
 
-# `@Module` 模块装饰器
+## `@Module` 模块装饰器
 
 `@Module()` 接收一个对象作为参数，对象有四个核心属性：
 
@@ -73,15 +75,15 @@ export class BooksService {
 
 ---
 
-# `@Injectable()` 装饰器：依赖注入的「上岗证」
+## `@Injectable()` 装饰器：依赖注入的「上岗证」
 
 > 💡 **一句话理解：** `@Injectable()` 就像贴在类头顶的「上岗证」，告诉 NestJS 的 IoC 容器（负责自动 `new` 对象的「管家」）：「我准备好了，谁需要我，你帮我送过去！」
 
-## 🛠️ 到底是谁触发了「自动注入」？
+### 🛠️ 到底是谁触发了「自动注入」？
 
 真正触发「把 Service 注入到 Controller」这个动作的，是 Controller 的 **constructor（构造函数）**。
 
-### 第一步：Service 声明「我可以被注入」
+#### 第一步：Service 声明「我可以被注入」
 
 ```javascript
 @Injectable() // 贴上上岗证：「我是合法的、可以被别人使用的服务」
@@ -92,7 +94,7 @@ export class CatsService {
 }
 ```
 
-### 第二步：Controller 通过 `constructor` 请求注入
+#### 第二步：Controller 通过 `constructor` 请求注入
 
 ```javascript
 @Controller('cats')
@@ -105,18 +107,18 @@ export class CatsController {
 
 ---
 
-# 环境变量处理
+## 环境变量处理
 
 在 NestJS 中，环境变量通过 [`@nestjs/config`](https://docs.nestjs.com/techniques/configuration) 模块来管理。它能让配置更灵活、更安全，也支持按环境（开发 / 测试 / 生产）动态加载。
 
-## 📦 安装依赖
+### 📦 安装依赖
 
 ```bash
 pnpm add @nestjs/config joi
 pnpm add -D @types/joi
 ```
 
-## ⚙️ 在 `app.module.ts` 中配置
+### ⚙️ 在 `app.module.ts` 中配置
 
 > ⚠️ **默认行为：** 不设置 `envFilePath` 时，`@nestjs/config` 默认读取项目根目录下的 `.env` 文件。
 
@@ -163,7 +165,7 @@ export class AppModule {}
 
 > 🛡️ **「拒绝带伤上线」原则：** `DATABASE_URL` 和 `JWT_SECRET` 后面加了 `.required()`，意思是项目启动时如果这两个变量缺失，会直接报错拒绝运行。避免线上跑到一半因为拿不到密钥而崩溃。
 
-## 🚀 在代码中访问环境变量
+### 🚀 在代码中访问环境变量
 
 ```javascript
 import { Injectable } from '@nestjs/common';
@@ -182,7 +184,7 @@ export class CatsService {
 }
 ```
 
-## 🔧 启动时设置 `NODE_ENV`
+### 🔧 启动时设置 `NODE_ENV`
 
 借助 [`cross-env`](https://www.npmjs.com/package/cross-env) 跨平台设置环境变量（Windows / Mac / Linux 通用）：
 
@@ -203,7 +205,7 @@ pnpm add -D cross-env
 }
 ```
 
-## 🎯 多环境 + 通用配置的组合用法
+### 🎯 多环境 + 通用配置的组合用法
 
 如果有一些**所有环境都共用**的变量，可以放在 `.env`，环境特定的变量放在 `.env.development` / `.env.production` 等文件里，然后把 `envFilePath` 改成数组：
 
@@ -213,7 +215,7 @@ envFilePath: [`.env.${process.env.NODE_ENV || 'development'}`, '.env'],
 
 **加载优先级：** `.env.development` > `.env` —— 先去环境特定文件找，找不到再回退到 `.env`。
 
-## 🕳️ 几个容易踩的坑
+### 🕳️ 几个容易踩的坑
 
 1. **`cross-env NODE_ENV=development && nest start`**
    `&&` 会让 `cross-env` 设完变量后立刻退出，**新进程拿不到 `NODE_ENV`**。正确写法：去掉 `&&`，让 `cross-env` 直接执行后面的命令。
@@ -228,14 +230,14 @@ envFilePath: [`.env.${process.env.NODE_ENV || 'development'}`, '.env'],
 
 ---
 
-# 中间件、拦截器与过滤器：构建全局请求响应处理管道
-## 中间件 Middleware
+## 中间件、拦截器与过滤器：构建全局请求响应处理管道
+### 中间件 Middleware
 **通俗理解：**
 中间件就像饭店门口的「迎宾」——客人（请求）还没走到点菜的服务员（Controller）面前，就先被迎宾拦下来：登记一下、查身份证、量体温、做个记录，做完后再放行进店。
 所以中间件的位置是：**请求进入 → 中间件 → Controller**，它可以读/改 request、提前结束响应，或者放行交给后面的 Controller 处理。
 
-### 两种写法
-#### 1️⃣ 类式中间件（推荐）
+#### 两种写法
+##### 1️⃣ 类式中间件（推荐）
 带 `@Injectable()`，能享受依赖注入（DI），可以在构造函数里注入其他 Service：
 ```javascript
 // src/middleware/logger.middleware.ts
@@ -252,7 +254,7 @@ export class LoggerMiddleware implements NestMiddleware {
 }
 ```
 
-#### 2️⃣ 函数式中间件
+##### 2️⃣ 函数式中间件
 不需要 DI 时可以直接写成函数，更轻量：
 ```javascript
 // src/middleware/logger.middleware.ts
@@ -264,7 +266,7 @@ export function loggerMiddleware(req: Request, res: Response, next: NextFunction
 }
 ```
 
-### 三种注册方式（决定中间件「作用在哪些路由上」）
+#### 三种注册方式（决定中间件「作用在哪些路由上」）
 
 | 类型              | 注册位置                                       | 作用范围                  | 能否享受 DI |
 | ----------------- | ---------------------------------------------- | ------------------------- | ----------- |
@@ -272,7 +274,7 @@ export function loggerMiddleware(req: Request, res: Response, next: NextFunction
 | **全局（类式）**   | `AppModule.configure()` + `.forRoutes('*')`    | 所有路由                  | ✅          |
 | **模块级 / 路由级** | 业务模块的 `configure()` + 指定路由             | 该模块声明的某些路由      | ✅          |
 
-#### ✅ 方式 A：全局类式中间件（最推荐）
+##### ✅ 方式 A：全局类式中间件（最推荐）
 在 `AppModule` 中实现 `NestModule` 接口，重写 `configure()`：
 ```javascript
 // src/app.module.ts
@@ -294,7 +296,7 @@ export class AppModule implements NestModule {
 }
 ```
 
-#### ⚠️ 方式 B：函数式全局中间件
+##### ⚠️ 方式 B：函数式全局中间件
 只能放在 `main.ts`，**必须写在 `app.listen()` 之前**，否则不生效：
 ```javascript
 // src/main.ts
@@ -307,7 +309,7 @@ async function bootstrap() {
 }
 ```
 
-#### ✅ 方式 C：模块级 / 路由级中间件
+##### ✅ 方式 C：模块级 / 路由级中间件
 把 `configure()` 写在业务模块里，只对该模块声明的路由生效：
 ```javascript
 // src/modules/cats/cats.module.ts
@@ -342,7 +344,7 @@ export class CatsModule implements NestModule {
 }
 ```
 
-### `forRoutes()` 参数速查
+#### `forRoutes()` 参数速查
 
 | 写法                                              | 含义                          |
 | ------------------------------------------------- | ----------------------------- |
@@ -353,7 +355,7 @@ export class CatsModule implements NestModule {
 | `CatsController`                                  | 该控制器里的全部路由（推荐） |
 | `.exclude(...)` 再 `.forRoutes(...)`              | 先排除特定路径再应用          |
 
-### 🕳️ 三个常见的坑
+#### 🕳️ 三个常见的坑
 1. **`app.use(LoggerMiddleware)` 写在 `app.listen()` 之后**
    → 中间件不会生效。中间件必须在 `listen()` **之前**注册。
 
@@ -363,18 +365,18 @@ export class CatsModule implements NestModule {
 3. **模块级中间件想跨模块作用**
    → 行不通。中间件**只能作用于「注册它的模块内部声明的路由」**。要给 `cats` 路由加中间件，必须在 `CatsModule` 里注册，或者放到 `AppModule` 走全局。
 
-### 怎么选？一句话决策
+#### 怎么选？一句话决策
 - 写**日志、CORS、解析请求体**这种「所有请求都关心」的事 → **全局**（推荐用 `AppModule.configure()` + `forRoutes('*')`）
 - 写**鉴权、限流、admin 校验**这种「只针对某些路由」的事 → **模块级 / 路由级**，写在对应业务模块的 `configure()` 里
 - 没有 DI 需求、又懒得建类 → 函数式 + `main.ts` 的 `app.use()`
 
-## 过滤器 Exception Filter
+### 过滤器 Exception Filter
 
 **通俗理解：**
 过滤器就像饭店的「投诉处理专员」——客人吃菜吃出问题（程序抛异常）时，不让后厨直接跟客人吵架，而是统一由专员出面：道歉、登记、按公司话术回复。
 所以过滤器的位置是：**Controller / Service 抛出异常 → 过滤器捕获 → 统一格式化错误响应**，前端永远看到的是同一种「错误体」结构，不会一会儿是 Express 默认 HTML、一会儿是裸字符串。
 
-### 写法
+#### 写法
 
 `@Catch()` 装饰器决定捕获哪一类异常，传 `HttpException` 表示只接管 HTTP 异常：
 
@@ -410,7 +412,7 @@ export class InterceptorExceptionFilter implements ExceptionFilter {
 
 > 💡 **小提示：** 想一锅端**所有**异常（包括非 HTTP 的、原生 `Error`），把 `@Catch(HttpException)` 改成 `@Catch()`（不传参数），并把 `exception` 类型放宽，自己处理状态码兜底。
 
-### 三种注册方式
+#### 三种注册方式
 
 | 类型     | 注册位置                                     | 作用范围         | 能否享受 DI                          |
 | -------- | -------------------------------------------- | ---------------- | ------------------------------------ |
@@ -418,7 +420,7 @@ export class InterceptorExceptionFilter implements ExceptionFilter {
 | **全局（推荐）** | `AppModule` 的 `providers` 里用 `APP_FILTER` token 注册 | 所有路由         | ✅                                   |
 | **控制器级 / 方法级** | `@UseFilters(X)` 装饰器贴在 Controller 或方法上 | 仅该控制器 / 方法 | ✅                                   |
 
-#### ✅ 方式 A：`main.ts` 全局注册（最简单）
+##### ✅ 方式 A：`main.ts` 全局注册（最简单）
 
 ```typescript
 // src/main.ts
@@ -432,7 +434,7 @@ async function bootstrap() {
 }
 ```
 
-#### ✅ 方式 B：通过 `APP_FILTER` 注入（需要 DI 时用这个）
+##### ✅ 方式 B：通过 `APP_FILTER` 注入（需要 DI 时用这个）
 
 ```typescript
 // src/app.module.ts
@@ -450,7 +452,7 @@ import { InterceptorExceptionFilter } from './exception/error-exception.filter';
 export class AppModule {}
 ```
 
-#### ✅ 方式 C：局部使用
+##### ✅ 方式 C：局部使用
 
 ```typescript
 @UseFilters(new InterceptorExceptionFilter()) // 贴在 Controller 上：作用于整个 Controller
@@ -462,11 +464,11 @@ export class CatsController {
 }
 ```
 
-### 🆚 两种全局注册方式的优缺点
+#### 🆚 两种全局注册方式的优缺点
 
 `useGlobalFilters(new X())` 和 `APP_FILTER` 看似都能「全局生效」，但底层机制完全不同，选错了会埋坑。
 
-#### 方式 A：`app.useGlobalFilters(new X())`
+##### 方式 A：`app.useGlobalFilters(new X())`
 
 ```typescript
 // main.ts
@@ -479,7 +481,7 @@ app.useGlobalFilters(new InterceptorExceptionFilter());
 | ✅ **不受模块加载顺序影响**，启动就生效                       | ❌ **不在模块树内**：单元测试时 `Test.createTestingModule()` 不知道它的存在，写测试不方便覆盖              |
 | ✅ 适合**完全无依赖的纯函数式**过滤器（只用 `exception` 和 `host`） | ❌ 多人协作时，main.ts 容易变成「全局注册的垃圾桶」，越堆越乱                                              |
 
-#### 方式 B：`APP_FILTER` token
+##### 方式 B：`APP_FILTER` token
 
 ```typescript
 // app.module.ts
@@ -497,7 +499,7 @@ app.useGlobalFilters(new InterceptorExceptionFilter());
 | ✅ **生命周期由容器管理**：默认单例，也能通过 `scope` 改成 `REQUEST` 作用域           | ❌ 必须写在某个 Module 的 `providers` 里（一般放 `AppModule`），跨模块感知度比 main.ts 弱 |
 | ✅ 跟 Nest 生态对齐：`APP_GUARD` / `APP_INTERCEPTOR` / `APP_PIPE` 是同一套思路    |                                                                                   |
 
-#### 决策清单
+##### 决策清单
 
 - 过滤器**没有任何依赖**（最朴素那种，就读 `exception` 转个格式） → **方式 A**，省事
 - 过滤器要**写日志、上报 Sentry、读配置** → **必须用方式 B**，否则注入的依赖是 `undefined`
@@ -506,13 +508,13 @@ app.useGlobalFilters(new InterceptorExceptionFilter());
 
 > ⚠️ **常见错误：** 同时用了方式 A 和方式 B 注册同一个过滤器 → 会被注册两次，异常响应被处理两遍（第二次往已经 `end` 的 response 上写会报错）。**二选一**。
 
-## 拦截器 Interceptor
+### 拦截器 Interceptor
 
 **通俗理解：**
 拦截器就像饭店的「上菜前的摆盘师傅 + 收银员」——后厨菜做好了（Controller 返回值），不直接端给客人，先经过他手：摆盘装饰一下（统一包装成 `{ code, message, data }`）、记下出菜耗时、顺手把 `BigInt` 这种客人看不懂的东西转成字符串。
 所以拦截器的位置是：**Controller 返回值 → 拦截器包装 → 客户端**。它能在请求**前后**都插一脚，比中间件晚、比过滤器早（只处理成功流程）。
 
-### 写法
+#### 写法
 
 实现 `NestInterceptor` 接口，核心是 `intercept(context, next)` 方法，用 RxJS 的 `pipe / map` 改造返回值：
 
@@ -581,7 +583,7 @@ export class InterceptorInterceptor implements NestInterceptor {
 }
 ```
 
-### 三种注册方式
+#### 三种注册方式
 
 跟过滤器几乎一一对应：
 
@@ -591,7 +593,7 @@ export class InterceptorInterceptor implements NestInterceptor {
 | **全局（推荐）**  | `AppModule.providers` 里用 `APP_INTERCEPTOR` token 注册 | 所有路由              | ✅          |
 | **控制器级 / 方法级** | `@UseInterceptors(X)` 装饰器贴在 Controller 或方法上 | 仅该控制器 / 方法     | ✅          |
 
-#### ✅ 方式 A：`main.ts` 全局注册
+##### ✅ 方式 A：`main.ts` 全局注册
 
 ```typescript
 // src/main.ts
@@ -608,7 +610,7 @@ async function bootstrap() {
 }
 ```
 
-#### ✅ 方式 B：通过 `APP_INTERCEPTOR` 注入
+##### ✅ 方式 B：通过 `APP_INTERCEPTOR` 注入
 
 ```typescript
 // src/app.module.ts
@@ -626,11 +628,11 @@ import { InterceptorInterceptor } from './exception/exception.filter';
 export class AppModule {}
 ```
 
-### 🆚 两种全局注册方式的优缺点
+#### 🆚 两种全局注册方式的优缺点
 
 跟过滤器一样，拦截器也有 `useGlobalInterceptors(new X())` 和 `APP_INTERCEPTOR` 两种全局玩法，差异点几乎一致：
 
-#### 方式 A：`app.useGlobalInterceptors(new X())`
+##### 方式 A：`app.useGlobalInterceptors(new X())`
 
 | 优点                                                     | 缺点                                                                                                  |
 | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -638,7 +640,7 @@ export class AppModule {}
 | ✅ **执行顺序明确**：按 `useGlobalInterceptors()` 调用顺序生效  | ❌ **测试不友好**：`Test.createTestingModule()` 看不到它，没法在测试里替换 mock                          |
 | ✅ 适合**纯转换型拦截器**（只改返回值，不依赖任何 Service）       | ❌ 一旦后期想加日志、Sentry 上报，就得整体迁移到方式 B                                                    |
 
-#### 方式 B：`APP_INTERCEPTOR` token
+##### 方式 B：`APP_INTERCEPTOR` token
 
 | 优点                                                                              | 缺点                                                                              |
 | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -647,14 +649,14 @@ export class AppModule {}
 | ✅ **作用域可控**：默认单例，需要的话能配 `Scope.REQUEST` 让每次请求一个新实例           | ❌ 在 main.ts 里看不到注册痕迹，新人接手时要去 Module 里翻才能发现                    |
 | ✅ 跟 `APP_FILTER` / `APP_GUARD` / `APP_PIPE` 是同一套 idiom，团队心智成本低         |                                                                                   |
 
-#### 决策清单（拦截器版）
+##### 决策清单（拦截器版）
 
 - 拦截器**只是格式化返回值**（你现在 [exception.filter.ts](src/exception/exception.filter.ts) 这个就是） → 用 **方式 A** 完全够，简单清爽
 - 拦截器要**打日志、计算耗时上报到 Prometheus、读 `ConfigService`** → **必须方式 B**
 - 多个拦截器需要**确保执行顺序**（比如「日志拦截器在最外层，响应包装在最内层」） → 用 **方式 B** 时按 `providers` 数组顺序排列；用 **方式 A** 时按 `useGlobalInterceptors(A, B, C)` 的参数顺序排列
 - 想给特定 Controller / 方法**叠加额外拦截器**（全局 + 局部并存） → 全局选哪种都行，局部用 `@UseInterceptors()` 装饰器追加
 
-#### 一个执行顺序的小坑
+##### 一个执行顺序的小坑
 
 不管是过滤器还是拦截器，**全局生效的实例只有一个**。这意味着：
 
@@ -669,7 +671,7 @@ providers: [{ provide: APP_INTERCEPTOR, useClass: InterceptorInterceptor }]
 → 同一个响应会被包装两次，最终结构变成 `{ data: { data: { ... } } }`，前端会一脸懵。**两种方式只能选一种**。
 
 
-## 三者对比：中间件 vs 拦截器 vs 过滤器
+### 三者对比：中间件 vs 拦截器 vs 过滤器
 
 | 维度       | 中间件 Middleware              | 拦截器 Interceptor                       | 过滤器 Filter                      |
 | ---------- | ------------------------------ | ---------------------------------------- | ---------------------------------- |
@@ -679,7 +681,7 @@ providers: [{ provide: APP_INTERCEPTOR, useClass: InterceptorInterceptor }]
 | **典型场景**   | 日志、CORS、解析 cookie、限流 | 统一响应包装、计算耗时、缓存、序列化转换 | 错误统一格式化、错误日志上报       |
 | **触发时机** | 任何请求                       | 仅当 Controller **正常返回**             | 仅当 Controller / Service **抛异常** |
 
-### 一张图总结执行顺序
+#### 一张图总结执行顺序
 
 ```text
 请求进来
@@ -701,7 +703,7 @@ providers: [{ provide: APP_INTERCEPTOR, useClass: InterceptorInterceptor }]
 客户端收到响应
 ```
 
-### 🕳️ 几个常见的坑
+#### 🕳️ 几个常见的坑
 
 1. **过滤器 / 拦截器在 `main.ts` 里 `new` 出来 → 拿不到 DI**
    `app.useGlobalXxx(new X())` 是手动 `new`，构造函数里写 `constructor(private readonly logger: Logger)` 不会被注入。需要 DI 就走 `APP_FILTER` / `APP_INTERCEPTOR` 注册。
@@ -715,20 +717,20 @@ providers: [{ provide: APP_INTERCEPTOR, useClass: InterceptorInterceptor }]
 4. **过滤器和拦截器的「全局」加载顺序**
    `APP_INTERCEPTOR` 通过 DI 注册时，多个拦截器的执行顺序 = `providers` 数组里的声明顺序。要保证「日志拦截器在外层、响应包装在内层」时，注意排列顺序。
 
-### 怎么选？一句话决策
+#### 怎么选？一句话决策
 
 - **每个接口都要返回统一的 `{ code, message, data }` 结构** → 全局**拦截器**（成功侧）
 - **所有抛出的 `HttpException` 都要返回统一的错误体** → 全局**过滤器**（失败侧）
 - **想记录每个请求的耗时 / IP / UA** → 中间件（最早入口） 或 拦截器（能拿到 handler 元数据）
 - **登录态校验、权限拦截** → 用**守卫 Guard**（不是这里讲的三个，但更合适）
 
-# DTO 校验
+## DTO 校验
 
 **通俗理解：**
 DTO 校验就像饭店点菜时的「菜单核对员」——客人下单前，先核对一遍：「您点的麻婆豆腐有没有写错成『麻辣豆腐』？年龄填的是数字而不是『大概二十岁』吧？」核对没问题才把单子送到后厨。
 所以 DTO 校验的位置是：**请求体（JSON） → ValidationPipe 校验 + 转换 → Controller 拿到干净的 DTO 实例**。
 
-## 📦 安装依赖
+### 📦 安装依赖
 
 ```bash
 pnpm add class-validator class-transformer
@@ -739,7 +741,7 @@ pnpm add class-validator class-transformer
 
 两个库必须**搭配**用，缺一个 ValidationPipe 就跑不起来。
 
-## ⚙️ 全局开启 ValidationPipe
+### ⚙️ 全局开启 ValidationPipe
 
 在 [main.ts](src/main.ts) 里注册一次，所有路由的 `@Body() / @Query() / @Param()` 都会自动走校验：
 
@@ -763,7 +765,7 @@ async function bootstrap() {
 }
 ```
 
-### 三个核心选项详解
+#### 三个核心选项详解
 
 | 选项                                    | 默认值 | 行为                                                                                    |
 | --------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
@@ -774,7 +776,7 @@ async function bootstrap() {
 
 > 🛡️ **「严打」组合（推荐开发期使用）：** `whitelist: true` + `forbidNonWhitelisted: true`。一旦客户端传了 DTO 里没定义的字段就立刻报错，强制 DTO 跟接口契约保持同步。
 
-## 🧱 编写 DTO
+### 🧱 编写 DTO
 
 `class-validator` 提供了几十个开箱即用的装饰器，常用的有：
 
@@ -824,7 +826,7 @@ export class CreateCatDto {
 }
 ```
 
-### 常用校验装饰器速查
+#### 常用校验装饰器速查
 
 | 类别       | 装饰器                                                          | 作用                              |
 | ---------- | --------------------------------------------------------------- | --------------------------------- |
@@ -836,13 +838,13 @@ export class CreateCatDto {
 | **集合**   | `@IsEnum(EnumType)` / `@IsIn([...])` / `@IsArray()`             | 枚举 / 在集合中 / 数组            |
 | **嵌套**   | `@ValidateNested()` + `@Type(() => SubDto)`                     | 校验对象内嵌套的 DTO              |
 
-## 🔄 transform 自动转换的原理
+### 🔄 transform 自动转换的原理
 
 JSON 协议里所有字段类型有限（字符串 / 数字 / 布尔 / null / 数组 / 对象），但 HTTP 协议里**`@Param()` 和 `@Query()` 永远是字符串**。`transform` 就是来解决这个落差的。
 
-### 三种转换触发方式
+#### 三种转换触发方式
 
-#### ① `@Type(() => XXX)`（精准、推荐）
+##### ① `@Type(() => XXX)`（精准、推荐）
 
 显式告诉 ValidationPipe：「这个字段要转成 XXX 类型」。
 
@@ -856,7 +858,7 @@ age: number;
 birthday: Date;
 ```
 
-#### ② `enableImplicitConversion: true`（省事、但激进）
+##### ② `enableImplicitConversion: true`（省事、但激进）
 
 开启后，ValidationPipe 会**读取 TS 类型元数据**，自动按声明类型转换：
 
@@ -870,7 +872,7 @@ age: number; // 不用写 @Type()，"123" 也能自动变成 123
 - `"false"` → `true`（**坑**！非空字符串都被当成 truthy）
 - 一个不留神可能把不该转的字段转坏
 
-#### ③ 路径参数 / 查询参数（开了 `transform` 就生效）
+##### ③ 路径参数 / 查询参数（开了 `transform` 就生效）
 
 ```typescript
 // 开了 transform: true 之后
@@ -882,7 +884,7 @@ findOne(@Param('id') id: number) {  // ← 直接声明 number，不用 +id
 
 GET `/cats/5` 进来时，`id` 会被自动从 `"5"` 转成 `5`。
 
-### 转换对照表
+#### 转换对照表
 
 | 输入（JSON / URL）    | 声明类型  | `@Type` 显式 | `enableImplicitConversion` | 结果           |
 | --------------------- | --------- | ------------ | -------------------------- | -------------- |
@@ -893,7 +895,7 @@ GET `/cats/5` 进来时，`id` 会被自动从 `"5"` 转成 `5`。
 | `"2024-01-01"`        | `Date`    | ✅           | ✅                         | `Date` 实例    |
 | `123`（数字）         | `string`  | ✅           | ✅                         | `"123"`        |
 
-## 📨 让校验错误返回详细信息
+### 📨 让校验错误返回详细信息
 
 ValidationPipe 默认抛 `BadRequestException`，错误详情藏在 `exception.getResponse()` 里：
 
@@ -958,7 +960,7 @@ export class InterceptorExceptionFilter implements ExceptionFilter {
 
 字段错在哪、错在什么规则上，一目了然。
 
-## 🔁 复用 DTO：`PartialType` / `PickType` / `OmitType`
+### 🔁 复用 DTO：`PartialType` / `PickType` / `OmitType`
 
 `@nestjs/mapped-types` 提供了几个工具，避免重复写校验装饰器：
 
@@ -982,7 +984,7 @@ export class PublicCatDto extends OmitType(CreateCatDto, ['ownerEmail'] as const
 
 复用的 DTO 自动继承父类的所有装饰器（`@IsString()` / `@IsNotEmpty()` 等），不用重新写。
 
-## 🕳️ 几个常见的坑
+### 🕳️ 几个常见的坑
 
 1. **`@IsNumber()` 写成 `@IsNumber({ message: '...' })`**
    `@IsNumber()` 第一个参数是**选项对象**（`allowNaN` / `allowInfinity` / `maxDecimalPlaces`），第二个参数才是 `message`。正确写法：`@IsNumber({}, { message: '必须是数字' })`，第一个参数传 `{}` 占位。
@@ -1007,7 +1009,7 @@ export class PublicCatDto extends OmitType(CreateCatDto, ['ownerEmail'] as const
 5. **`forbidNonWhitelisted` 在线上也开着**
    开发期开是好事；但生产环境如果客户端版本多样（旧版客户端可能多带些字段），建议只保留 `whitelist: true`（静默剥离），避免无谓的 400。
 
-## 怎么选？一句话决策
+### 怎么选？一句话决策
 
 - **后端是单体应用、前端就你自己** → 开**严打**组合（`whitelist + forbidNonWhitelisted`），逼自己同步 DTO
 - **对外开放 API、客户端版本难控** → 只开 `whitelist`，宽容一点
