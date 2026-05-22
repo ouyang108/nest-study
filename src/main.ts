@@ -13,8 +13,13 @@
 //     console.error('Error starting application:', error);
 //   });
 
+// === 诊断日志：定位启动卡点 ===
+
 import { NestFactory } from '@nestjs/core';
+
 import { AppModule } from './app.module';
+
+import { ValidationPipe } from '@nestjs/common';
 // 引入全局响应拦截器（成功响应统一格式化）
 import { InterceptorInterceptor } from './exception/exception.filter';
 // 引入全局异常过滤器（HttpException 统一格式化）
@@ -24,7 +29,14 @@ async function bootstrap() {
   // 创建 Nest 应用实例
   const app = await NestFactory.create(AppModule);
   // app.use(LoggerMiddleware); // 全局使用 LoggerMiddleware 中间件，记录每个请求的日志
-
+  // 开启DTO验证管道：自动验证请求体数据是否符合 DTO 定义的规则，验证失败会抛出异常
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true, // 自动移除未定义的属性
+      // forbidNonWhitelisted: true, // 抛出异常，而不是简单忽略
+      transform: true, // 自动转换数据类型
+    }),
+  );
   // 注册全局响应拦截器：把 controller 返回值包装成统一结构 { code, message, data, success, ... }
   app.useGlobalInterceptors(new InterceptorInterceptor());
   // 注册全局异常过滤器：捕获 HttpException 并按统一结构返回错误响应

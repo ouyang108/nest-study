@@ -722,3 +722,352 @@ providers: [{ provide: APP_INTERCEPTOR, useClass: InterceptorInterceptor }]
 - **想记录每个请求的耗时 / IP / UA** → 中间件（最早入口） 或 拦截器（能拿到 handler 元数据）
 - **登录态校验、权限拦截** → 用**守卫 Guard**（不是这里讲的三个，但更合适）
 
+# DTO 校验
+
+**通俗理解：**
+DTO 校验就像饭店点菜时的「菜单核对员」——客人下单前，先核对一遍：「您点的麻婆豆腐有没有写错成『麻辣豆腐』？年龄填的是数字而不是『大概二十岁』吧？」核对没问题才把单子送到后厨。
+所以 DTO 校验的位置是：**请求体（JSON） → ValidationPipe 校验 + 转换 → Controller 拿到干净的 DTO 实例**。
+
+## 📦 安装依赖
+
+```bash
+pnpm add class-validator class-transformer
+```
+
+- `class-validator`：负责**校验规则**（`@IsString` / `@IsNotEmpty` / `@Min` 等装饰器）
+- `class-transformer`：负责**类型转换**（plain object → class 实例、字符串 → 数字等）
+
+两个库必须**搭配**用，缺一个 ValidationPipe 就跑不起来。
+
+## ⚙️ 全局开启 ValidationPipe
+
+在 [main.ts](src/main.ts) 里注册一次，所有路由的 `@Body() / @Query() / @Param()` 都会自动走校验：
+
+```typescript
+import { ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  // 开启 DTO 校验管道
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,            // 自动剥离 DTO 里没定义的字段
+      forbidNonWhitelisted: true, // 多传字段直接 400（开发期建议开，能立刻发现 DTO 漏更新）
+      transform: true,            // 自动把请求数据转成 DTO 实例（含类型转换）
+      transformOptions: {
+        enableImplicitConversion: true, // 根据 TS 类型自动转（"123" → 123，慎用）
+      },
+    }),
+  );
+  await app.listen(3000);
+}
+```
+
+### 三个核心选项详解
+
+| 选项                                    | 默认值 | 行为                                                                                    |
+| --------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
+| `whitelist`                             | `false` | DTO 里**没定义**的字段会被**静默剥离**（请求继续放行）                                     |
+| `forbidNonWhitelisted`                  | `false` | DTO 里**没定义**的字段会**抛 400**（必须搭配 `whitelist: true` 使用）                      |
+| `transform`                             | `false` | 把 `req.body` 从普通对象转成 DTO **类的实例**（`createCatDto instanceof CreateCatDto === true`） |
+| `transformOptions.enableImplicitConversion` | `false` | 在 `transform` 基础上，**根据 TS 类型注解**自动做类型转换（`number` / `boolean` / `Date`） |
+
+> 🛡️ **「严打」组合（推荐开发期使用）：** `whitelist: true` + `forbidNonWhitelisted: true`。一旦客户端传了 DTO 里没定义的字段就立刻报错，强制 DTO 跟接口契约保持同步。
+
+## 🧱 编写 DTO
+
+`class-validator` 提供了几十个开箱即用的装饰器，常用的有：
+
+```typescript
+// src/modules/cats/dto/create-cat.dto.ts
+import { Type } from 'class-transformer';
+import {
+  IsNotEmpty,
+  IsString,
+  IsNumber,
+  IsOptional,
+  IsEnum,
+  IsEmail,
+  Length,
+  Min,
+  Max,
+} from 'class-validator';
+
+export enum CatBreed {
+  英短 = 'BRITISH_SHORTHAIR',
+  美短 = 'AMERICAN_SHORTHAIR',
+  狸花 = 'CHINESE_LIHUA',
+}
+
+export class CreateCatDto {
+  // 字符串：非空 + 类型 + 长度
+  @IsNotEmpty({ message: '猫咪名字不能为空' })
+  @IsString({ message: '猫咪名字必须是字符串' })
+  @Length(1, 20, { message: '猫咪名字长度必须在 1-20 之间' })
+  name: string;
+
+  // 枚举：限定取值范围
+  @IsEnum(CatBreed, { message: '猫咪品种必须是 英短 / 美短 / 狸花 之一' })
+  breed: CatBreed;
+
+  // 数字：先转换再校验，最后限制范围
+  @Type(() => Number) // 把字符串显式转成数字（即使没开 enableImplicitConversion 也生效）
+  @IsNumber({}, { message: '猫咪年龄必须是数字' })
+  @Min(0, { message: '猫咪年龄不能小于 0' })
+  @Max(30, { message: '猫咪年龄不能大于 30' })
+  age: number;
+
+  // 可选字段：用 @IsOptional() 标记，没传就跳过后续校验
+  @IsOptional()
+  @IsEmail({}, { message: '主人邮箱格式不正确' })
+  ownerEmail?: string;
+}
+```
+
+### 常用校验装饰器速查
+
+| 类别       | 装饰器                                                          | 作用                              |
+| ---------- | --------------------------------------------------------------- | --------------------------------- |
+| **存在性** | `@IsNotEmpty()` / `@IsOptional()` / `@IsDefined()`              | 必填 / 可选 / 必须定义（可为 null）|
+| **基础类型** | `@IsString()` / `@IsNumber()` / `@IsBoolean()` / `@IsDate()`    | 类型校验                          |
+| **数值范围** | `@Min(n)` / `@Max(n)` / `@IsPositive()` / `@IsInt()`            | 数值约束                          |
+| **字符串** | `@Length(min, max)` / `@MinLength(n)` / `@MaxLength(n)` / `@Matches(regex)` | 长度 / 正则               |
+| **格式**   | `@IsEmail()` / `@IsUrl()` / `@IsUUID()` / `@IsPhoneNumber('CN')` | 常见格式                          |
+| **集合**   | `@IsEnum(EnumType)` / `@IsIn([...])` / `@IsArray()`             | 枚举 / 在集合中 / 数组            |
+| **嵌套**   | `@ValidateNested()` + `@Type(() => SubDto)`                     | 校验对象内嵌套的 DTO              |
+
+## 🔄 transform 自动转换的原理
+
+JSON 协议里所有字段类型有限（字符串 / 数字 / 布尔 / null / 数组 / 对象），但 HTTP 协议里**`@Param()` 和 `@Query()` 永远是字符串**。`transform` 就是来解决这个落差的。
+
+### 三种转换触发方式
+
+#### ① `@Type(() => XXX)`（精准、推荐）
+
+显式告诉 ValidationPipe：「这个字段要转成 XXX 类型」。
+
+```typescript
+@Type(() => Number) // "123" → 123
+@IsNumber()
+age: number;
+
+@Type(() => Date) // "2024-01-01" → Date 实例
+@IsDate()
+birthday: Date;
+```
+
+#### ② `enableImplicitConversion: true`（省事、但激进）
+
+开启后，ValidationPipe 会**读取 TS 类型元数据**，自动按声明类型转换：
+
+```typescript
+@IsNumber()
+age: number; // 不用写 @Type()，"123" 也能自动变成 123
+```
+
+代价：转换规则比较粗暴，比如：
+- `"abc"` → `NaN`（会被 `@IsNumber()` 拦下，问题不大）
+- `"false"` → `true`（**坑**！非空字符串都被当成 truthy）
+- 一个不留神可能把不该转的字段转坏
+
+#### ③ 路径参数 / 查询参数（开了 `transform` 就生效）
+
+```typescript
+// 开了 transform: true 之后
+@Get(':id')
+findOne(@Param('id') id: number) {  // ← 直接声明 number，不用 +id
+  return this.catsService.findOne(id);
+}
+```
+
+GET `/cats/5` 进来时，`id` 会被自动从 `"5"` 转成 `5`。
+
+### 转换对照表
+
+| 输入（JSON / URL）    | 声明类型  | `@Type` 显式 | `enableImplicitConversion` | 结果           |
+| --------------------- | --------- | ------------ | -------------------------- | -------------- |
+| `"123"`               | `number`  | ✅           | ✅                         | `123`          |
+| `"123"`               | `number`  | ❌           | ❌                         | 校验失败（仍是字符串） |
+| `"abc"`               | `number`  | ✅ / ✅      | -                          | `NaN` → 校验失败 |
+| `"true"` / `"false"`  | `boolean` | ❌           | ✅                         | ⚠️ 都是 `true`（坑） |
+| `"2024-01-01"`        | `Date`    | ✅           | ✅                         | `Date` 实例    |
+| `123`（数字）         | `string`  | ✅           | ✅                         | `"123"`        |
+
+## 📨 让校验错误返回详细信息
+
+ValidationPipe 默认抛 `BadRequestException`，错误详情藏在 `exception.getResponse()` 里：
+
+```typescript
+// 校验失败时 exception.getResponse() 的结构
+{
+  statusCode: 400,
+  message: [
+    "猫咪名字不能为空",
+    "猫咪年龄必须是数字"
+  ],
+  error: "Bad Request"
+}
+```
+
+但如果过滤器只取 `exception.message`，前端永远只能看到 `"Bad Request Exception"` 这种没用的文案。需要在过滤器里**优先取 `getResponse().message`**：
+
+```typescript
+// src/exception/error-exception.filter.ts
+@Catch(HttpException)
+export class InterceptorExceptionFilter implements ExceptionFilter {
+  catch(exception: HttpException, host: ArgumentsHost): void {
+    const ctx = host.switchToHttp();
+    const request = ctx.getRequest<Request>();
+    const response = ctx.getResponse<Response>();
+
+    const errorResponse = exception.getResponse();
+    let message: string | string[] = exception.message;
+
+    // 校验失败时，详细错误在 getResponse() 返回的对象的 message 字段里
+    if (typeof errorResponse === 'object' && errorResponse !== null) {
+      const detail = (errorResponse as { message?: string | string[] }).message;
+      if (detail) message = detail; // 字符串数组（多个错误）或单个字符串
+    }
+
+    response.status(exception.getStatus()).json({
+      timestamp: new Date().toISOString(),
+      path: request.url,
+      message,
+      code: exception.getStatus(),
+      success: false,
+    });
+  }
+}
+```
+
+改造后，前端拿到的响应：
+
+```json
+{
+  "timestamp": "2026-05-22T...",
+  "path": "/cats",
+  "message": [
+    "猫咪名字不能为空",
+    "猫咪年龄必须是数字",
+    "猫咪年龄不能小于 0"
+  ],
+  "code": 400,
+  "success": false
+}
+```
+
+字段错在哪、错在什么规则上，一目了然。
+
+## 🔁 复用 DTO：`PartialType` / `PickType` / `OmitType`
+
+`@nestjs/mapped-types` 提供了几个工具，避免重复写校验装饰器：
+
+```bash
+pnpm add @nestjs/mapped-types
+```
+
+```typescript
+import { PartialType, PickType, OmitType } from '@nestjs/mapped-types';
+import { CreateCatDto } from './create-cat.dto';
+
+// 更新场景：所有字段变成可选（PATCH 请求常用）
+export class UpdateCatDto extends PartialType(CreateCatDto) {}
+
+// 只挑几个字段
+export class CatNameDto extends PickType(CreateCatDto, ['name'] as const) {}
+
+// 排除几个字段
+export class PublicCatDto extends OmitType(CreateCatDto, ['ownerEmail'] as const) {}
+```
+
+复用的 DTO 自动继承父类的所有装饰器（`@IsString()` / `@IsNotEmpty()` 等），不用重新写。
+
+## 🕳️ 几个常见的坑
+
+1. **`@IsNumber()` 写成 `@IsNumber({ message: '...' })`**
+   `@IsNumber()` 第一个参数是**选项对象**（`allowNaN` / `allowInfinity` / `maxDecimalPlaces`），第二个参数才是 `message`。正确写法：`@IsNumber({}, { message: '必须是数字' })`，第一个参数传 `{}` 占位。
+
+2. **DTO 写成接口（`interface`）而不是类（`class`）**
+   `class-validator` 装饰器**只能贴在 class 上**。接口在编译后会被擦除，运行时 ValidationPipe 拿不到任何元数据，校验直接失效。
+
+3. **忘了在 `tsconfig.json` 里开 `emitDecoratorMetadata`**
+   ```json
+   {
+     "compilerOptions": {
+       "experimentalDecorators": true,
+       "emitDecoratorMetadata": true   // 没这一行，@Type() 和隐式转换都会失效
+     }
+   }
+   ```
+   Nest 脚手架默认开了，但手动迁移项目时容易漏。
+
+4. **`transform: true` 没开，却期望 `@Param('id') id: number` 自动转**
+   不开 `transform`，`id` 永远是字符串，`+id` 或 `Number(id)` 是兜底方案。开了之后才能享受自动转换的便利。
+
+5. **`forbidNonWhitelisted` 在线上也开着**
+   开发期开是好事；但生产环境如果客户端版本多样（旧版客户端可能多带些字段），建议只保留 `whitelist: true`（静默剥离），避免无谓的 400。
+
+## 怎么选？一句话决策
+
+- **后端是单体应用、前端就你自己** → 开**严打**组合（`whitelist + forbidNonWhitelisted`），逼自己同步 DTO
+- **对外开放 API、客户端版本难控** → 只开 `whitelist`，宽容一点
+- **DTO 字段不多、想最少的代码** → 开 `enableImplicitConversion`，省去一堆 `@Type()`
+- **DTO 复杂、想精准控制** → 老老实实写 `@Type()`，规则清晰可读
+- **错误文案要给前端展示** → 装饰器都加 `{ message: '...' }`，过滤器从 `getResponse().message` 取数组
+
+
+
+# 数据库篇
+
+## PostgreSQL + Prisma
+
+> 官方流程参考：[Prisma × NestJS 集成指南](https://www.prisma.io/docs/guides/frameworks/nestjs)
+
+### 一、依赖安装
+
+```bash
+# 开发依赖：CLI 工具
+pnpm add prisma --save-dev
+
+# 运行时依赖：客户端 + 驱动适配器
+pnpm add @prisma/client @prisma/adapter-pg pg
+
+# 类型定义（按需）
+pnpm add @types/pg --save-dev
+```
+
+### 二、依赖说明
+
+| 依赖包 | 类型 | 作用 |
+| --- | --- | --- |
+| `prisma` | devDependency | Prisma CLI，用于执行 `prisma init`、`prisma db pull`、`prisma generate` 等命令 |
+| `@prisma/client` | dependency | Prisma 客户端库，用于在代码中查询数据库 |
+| `@prisma/adapter-pg` | dependency | 将 Prisma Client 桥接到 `node-postgres` 驱动的适配器 |
+| `pg` | dependency | `node-postgres` 数据库驱动 |
+| `@types/pg` | devDependency | `node-postgres` 的 TypeScript 类型定义 |
+
+### 三、常见问题
+
+#### ❗ 报错：`exports is not defined in ES module scope`
+
+**原因**：项目使用 ESM，而 Prisma 默认生成的客户端是 CJS 风格，模块格式不匹配。
+
+**解决**：在 `prisma/schema.prisma` 中显式声明 `moduleFormat`：
+
+```prisma
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"   // ← 关键：与项目模块格式保持一致
+}
+```
+
+修改后重新生成客户端：
+
+```bash
+pnpm exec prisma generate
+```
+
+### 四、环境变量
+
+> 💡 本项目的 Prisma 读取的 `DATABASE_URL` 由 `package.json` 中的 `cross-env NODE_ENV=xxx` 间接控制——根据 `NODE_ENV` 加载对应的 `.env.{env}` 文件，例如 `start:dev` 加载 `.env.development`，`start:test` 加载 `.env.test`。

@@ -4,7 +4,8 @@
       "PowerShell(New-Item -ItemType Directory -Path src\\\\modules -Force)",
       "PowerShell(Move-Item src\\\\cats src\\\\modules\\\\cats)",
       "PowerShell(Move-Item src\\\\user src\\\\modules\\\\user)",
-      "PowerShell(npx tsc --noEmit 2>&1)"
+      "PowerShell(npx tsc --noEmit 2>&1)",
+      "Bash(powershell -Command \"\\(Get-Content e:\\\\daima\\\\gitee\\\\nest-study\\\\README.md | Measure-Object -Line\\).Lines\")"
     ]
   }
 }
