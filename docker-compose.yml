@@ -1,0 +1,28 @@
+# 显式给项目命名，docker desktop / CLI 里这一组容器会归在 nest-study 名下
+name: nest-study
+
+services:
+  # 1️⃣ Redis：与 .env.development 中的 REDIS_URL=redis://localhost:6379 对齐
+  new-redis:
+    image: redis:7.4
+    container_name: nest-redis-1
+    # 本地端口和容器端口都用 6379（如果本机已有 Redis 占用 6379，要么停掉它，要么把左边改成其他端口）
+    ports:
+      - "6379:6379"
+    # 启动时直接传 Redis 配置：限制最大内存 1GB，淘汰策略 allkeys-lru（纯缓存场景推荐）
+    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru
+
+  # 2️⃣ PostgreSQL：与 .env.development 中的 DATABASE_URL 对齐
+  # DATABASE_URL="postgresql://postgres:123456@localhost:5432/test"
+  new-db:
+    image: postgres:16
+    container_name: nest-pg-1
+    # 本地端口和容器端口都用 5432（如果本机已装 PostgreSQL 占用 5432，要么停掉它，要么把左边改成其他端口）
+    ports:
+      - "5434:5434"
+    environment:
+      # 用户、密码、库名严格对应 .env.development 中 DATABASE_URL 里的字段
+      # ⚠️ 注意：这些环境变量只在数据卷首次初始化时生效；改了密码后需要 docker compose down -v 才会重新建库
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "123456"
+      POSTGRES_DB: test

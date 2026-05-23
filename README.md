@@ -1559,4 +1559,283 @@ export class CatsService {
 6. **缓存穿透**
    查询不存在的数据时，每次都会走 DB。防御方法：把「查不到」的结果也缓存一份（短 ttl，比如 5 秒），或上布隆过滤器。
 
+---
+
+## ioredis（待补充 🚧）
+
+> ⚠️ **当前状态：占位章节，尚未在项目中落地实现。** 后续接入消息推送 / 任务队列 / 分布式锁等场景时再完善示例代码。
+
+### 一、ioredis 是什么
+
+**`ioredis`** 是 Node.js 生态最流行的 Redis 客户端之一，定位是**底层、全功能、面向 Redis 协议**的连接库。它和上面的 `cache-manager` 不冲突 —— 一个管"缓存语义"，一个管"完整 Redis 命令"。
+
+### 二、和 cache-manager 的分工
+
+| 维度 | cache-manager + @keyv/redis | ioredis |
+| --- | --- | --- |
+| 抽象层级 | 高层（缓存语义：get / set / ttl） | 低层（Redis 命令一比一映射） |
+| 能做什么 | 缓存读写、装饰器集成 | 全部 Redis 命令：pub/sub、stream、pipeline、Lua、事务 |
+| 不能做什么 | pub/sub、streams、复杂事务 | 没有装饰器、没有自动序列化 |
+| 使用方式 | `@Inject(CACHE_MANAGER)` | `new Redis(url)` 直接用 |
+
+> 简单说：**cache-manager 是"键值缓存"，ioredis 是"完整 Redis 客户端"。**
+
+### 三、什么时候才需要 ioredis
+
+下面这些场景 cache-manager **做不了**或**做得很别扭**，就得直接上 ioredis：
+
+1. **发布订阅（Pub/Sub）** — 实时推送、跨进程通信
+2. **Stream / List** — 消息队列、任务流
+3. **Pipeline / Transaction** — 批量原子操作
+4. **Lua 脚本** — 服务端原子计算（限流、库存扣减）
+5. **分布式锁（Redlock）** — 多节点互斥
+6. **BullMQ 之类的库** — 它们底层都要求传一个 ioredis 实例
+
+> 💡 如果只做接口缓存，cache-manager 已经足够，**不用着急引入 ioredis**。
+
+### 四、当前项目状态
+
+`package.json` 里**已经装了 `ioredis`**，但目前没有任何代码在用它（`@keyv/redis` 走的是官方 `node-redis`，跟 ioredis 是两套客户端）。
+
+可选处理方式：
+
+- **方案 A**：先卸载，等真正用到再装回来
+  ```bash
+  pnpm remove ioredis
+  ```
+- **方案 B**：保留，作为后续接入 BullMQ / 分布式锁的预备依赖（推荐 ✅）
+
+### 五、🚧 待补充内容（TODO）
+
+下面这些小节等真正用到时再补：
+
+- [ ] **DIY 方案**：手写 `RedisModule` + `REDIS_CLIENT` 注入令牌（推荐学习阶段使用）
+- [ ] **社区包方案**：`@nestjs-modules/ioredis` 集成示例
+- [ ] **常见用法示例**：
+  - [ ] Pub/Sub 发布订阅
+  - [ ] `INCR` + `EXPIRE` 实现接口限流
+  - [ ] `SET NX EX` 实现分布式锁
+  - [ ] `pipeline` 批量操作
+- [ ] **连接管理**：重连策略、错误处理、优雅关闭
+- [ ] **DIY vs 社区包决策建议**
+
+> 💬 后续接入相关功能时，把对应小节的 `[ ]` 改成 `[x]` 并补全代码即可。
+
+---
+
+# Docker 篇
+
+## Docker Compose 一键启动 Redis + PostgreSQL
+
+> 配置文件：[docker-compose.yml](docker-compose.yml)
+>
+> 用 Docker Compose 把 **Redis** 和 **PostgreSQL** 一起跑起来，避免本地装服务的环境污染问题。
+
+### 一、为什么用 Docker
+
+| 痛点 | Docker 的解决方式 |
+| --- | --- |
+| 本地装 PostgreSQL / Redis 污染系统、版本难管理 | 容器隔离，一行命令拉起、一行命令删干净 |
+| 多个项目共用一台机器，端口冲突 | 通过 `ports` 映射控制本地端口，默认与容器内端口一致（5432/6379），冲突时再改 |
+| 团队协作环境不一致 | `docker-compose.yml` 提交到仓库，所有人一份配置 |
+| 想试不同版本（PG 14 vs 16） | 改一行 `image: postgres:16` 就能切 |
+
+### 二、配置说明
+
+当前 [docker-compose.yml](docker-compose.yml) 跑了两个服务：
+
+| 服务名 | 镜像 | 容器名 | 本地端口 | 容器内端口 |
+| --- | --- | --- | --- | --- |
+| `new-redis` | `redis:7.4` | `nest-redis-1` | **6379** | 6379 |
+| `new-db` | `postgres:16` | `nest-pg-1` | **5432** | 5432 |
+
+> 🚨 **关于端口**
+> 当前配置本地端口与容器内端口一致（默认值），方便直接用 `redis-cli` / `psql` 连接，**前提是本机这两个端口没被占用**。如果出现 `port is already allocated`：
+>
+> - 要么停掉本机上占用端口的服务（比如本地装的 PostgreSQL / Redis）
+> - 要么改 [docker-compose.yml](docker-compose.yml) 里 `ports` 左侧的本地端口（如 `"5439:5432"`），并同步修改 `.env.development` 里的 `DATABASE_URL` / `REDIS_URL`
+
+#### Redis 配置要点
+
+```yaml
+command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru
+```
+
+启动时直接传参，相当于在 `redis.conf` 里写了：
+
+- `maxmemory 1gb` — Redis 最多使用 1GB 内存
+- `maxmemory-policy allkeys-lru` — 内存满了淘汰最久未使用的 key（**纯缓存场景推荐**，避免 OOM 直接挂掉）
+
+> 💡 关于淘汰策略的详细对比，见 [缓存篇 - 几个常见的坑](#九-几个常见的坑) 上方关于 `maxmemory-policy` 的说明。
+
+#### PostgreSQL 配置要点
+
+```yaml
+environment:
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: "123456"
+  POSTGRES_DB: test
+```
+
+容器**首次启动时**会自动：
+
+1. 创建用户 `postgres` 并设置密码 `123456`
+2. 创建数据库 `test`
+3. 给 `postgres` 授权这个库的所有权限
+
+> ⚠️ 这些 `environment` 变量**只在数据卷为空时生效**。如果改了密码但容器之前跑过，得先 `docker compose down -v` 清掉数据卷才会重新初始化。
+
+### 三、配套的 .env 配置
+
+服务跑在 **本地默认端口 6379 / 5432**，`.env.development` 配置如下：
+
+```bash
+# PostgreSQL：用户/密码/库名要与 docker-compose.yml 的 environment 完全一致
+DATABASE_URL="postgresql://postgres:123456@localhost:5432/test"
+
+# Redis
+REDIS_URL=redis://localhost:6379
+```
+
+### 四、常用启动命令
+
+#### 4.1 启动服务
+
+```bash
+# 前台启动（看日志，Ctrl+C 停止）
+docker compose up
+
+# 后台启动（推荐，启动后终端可以继续干别的）
+docker compose up -d
+
+# 强制重新构建后启动（改了 yml 文件后用）
+docker compose up -d --force-recreate
+```
+
+#### 4.2 查看状态
+
+```bash
+# 看哪些服务在跑
+docker compose ps
+
+# 看日志（-f = 实时跟随，类似 tail -f）
+docker compose logs -f
+
+# 只看某个服务的日志
+docker compose logs -f new-redis
+docker compose logs -f new-db
+```
+
+#### 4.3 停止服务
+
+```bash
+# 停止但保留容器和数据（下次 up 还在）
+docker compose stop
+
+# 停止 + 删除容器（数据卷保留，数据还在）
+docker compose down
+
+# ⚠️ 停止 + 删除容器 + 删除数据卷（数据会丢！）
+docker compose down -v
+```
+
+#### 4.4 进入容器调试
+
+```bash
+# 进入 Redis CLI
+docker exec -it nest-redis-1 redis-cli
+
+# 进入 PostgreSQL psql
+docker exec -it nest-pg-1 psql -U postgres -d test
+
+# 进入容器的 shell（万能调试方式）
+docker exec -it nest-pg-1 bash
+```
+
+#### 4.5 重启某个服务
+
+```bash
+# 改了配置只想重启一个
+docker compose restart new-redis
+```
+
+### 五、典型工作流
+
+#### 第一次启动项目
+
+```bash
+# 1. 拉起 Redis + PG
+docker compose up -d
+
+# 2. 等几秒让 PG 完成初始化（首次会建库建用户）
+docker compose logs -f new-db
+# 看到 "database system is ready to accept connections" 就行
+
+# 3. 跑 Prisma 迁移建表
+pnpm exec prisma migrate dev
+
+# 4. 启动 Nest
+pnpm start:dev
+```
+
+#### 日常开发
+
+```bash
+# 早上来开机
+docker compose up -d
+
+# 晚上下班
+docker compose stop   # 不删容器，第二天直接 up -d 接着用
+```
+
+#### 切换分支 / 重置数据
+
+```bash
+# 完全清空重来（包括数据库里的所有数据！）
+docker compose down -v
+docker compose up -d
+pnpm exec prisma migrate dev
+```
+
+### 六、🕳️ 几个常见的坑
+
+1. **修改 environment 后密码不生效**
+   PG 的 `POSTGRES_USER` / `POSTGRES_PASSWORD` 只在**数据卷首次初始化时**生效。改了密码却没清卷，新密码会被忽略。
+   解决：`docker compose down -v` 后重新 `up -d`。
+
+2. **端口冲突报错 `port is already allocated`**
+   说明 6379 / 5432 被本机其他进程占用了（常见于本地已经装了 PostgreSQL / Redis）。两种处理方式：
+   - 停掉本机的占用服务
+   - 或者改 [docker-compose.yml](docker-compose.yml) 里 `ports` 左侧的本地端口（例如 `"6389:6379"`、`"5439:5432"`），同时同步改 `.env.development` 里的 `DATABASE_URL` / `REDIS_URL`。
+
+3. **容器名重复 `Conflict. The container name "/nest-pg-1" is already in use`**
+   说明之前有同名容器残留。`docker rm -f nest-pg-1` 删掉后再启动。
+
+4. **Prisma 连不上数据库**
+   检查清单：
+   - 容器有没有起来：`docker compose ps`
+   - 端口对不对：`.env.development` 里写的本地端口（默认 **5432**）要和 [docker-compose.yml](docker-compose.yml) 里 `ports` 左侧的本地端口一致
+   - PG 初始化完了吗：`docker compose logs new-db` 看有没有 "ready to accept connections"
+
+5. **数据丢失**
+   当前 [docker-compose.yml](docker-compose.yml) **没有显式挂载 volumes**，数据放在 Docker 默认管理的匿名卷里。`docker compose down -v` 会一起删掉。
+   如果想让数据更可控，可以加上：
+   ```yaml
+   services:
+     new-db:
+       volumes:
+         - ./data/pg:/var/lib/postgresql/data
+   ```
+   这样数据存到项目目录的 `./data/pg` 下，删容器不影响。
+
+### 七、🚧 后续可以补充的
+
+- [ ] 加 `volumes` 持久化数据到本地目录
+- [ ] 加 `healthcheck` 让 Nest 等待数据库就绪后再启动
+- [ ] 加 `depends_on` 处理服务启动顺序
+- [ ] 多环境 compose 文件拆分：`docker-compose.dev.yml` / `docker-compose.prod.yml`
+- [ ] 把 Nest 应用本身也容器化（多阶段构建）
+
+
+
 
