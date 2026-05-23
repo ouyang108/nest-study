@@ -1353,3 +1353,210 @@ pnpm exec prisma migrate reset
 | 业务测试数据 | ✅ 加，但用 `NODE_ENV` 隔离生产 | 见 `seedDevOnly()` |
 | 一次性数据修复（洗历史数据） | ❌ 不要用种子 | 用一次性脚本或 SQL migration |
 
+---
+
+# 缓存篇
+
+## Redis 缓存（cache-manager v7 + @keyv/redis）
+
+> 官方文档：[NestJS Caching](https://docs.nestjs.com/techniques/caching)
+
+### 一、依赖安装
+
+```bash
+pnpm add @nestjs/cache-manager cache-manager @keyv/redis keyv cacheable
+```
+
+### 二、依赖说明
+
+| 依赖包 | 作用 |
+| --- | --- |
+| `@nestjs/cache-manager` | NestJS 封装的缓存模块，提供 `CacheModule`、`CacheInterceptor`、`@CacheKey`、`@CacheTTL` |
+| `cache-manager` v7 | 缓存核心库，v7 起底层切换到 Keyv |
+| `@keyv/redis` | Keyv 的 Redis 适配器，把 Redis 当作 store |
+| `keyv` | Keyv 主库（peer dependency） |
+| `cacheable` | cache-manager v7 的内部依赖 |
+
+> ⚠️ **版本兼容性大坑**：cache-manager v6 及以前用的是 `cache-manager-redis-yet` / `cache-manager-redis-store`，**v7 必须用 `@keyv/redis`**。装错包会报 `stores` 类型不匹配。
+
+### 三、v7 与旧版的关键差异
+
+| 旧版（v5 / v6） | 新版（v7） |
+| --- | --- |
+| `ttl` 单位是**秒** | `ttl` 单位是**毫秒** |
+| `store: redisStore` | `stores: [createKeyv(url)]` |
+| `cache.reset()` | `cache.clear()` |
+| `cache-manager-redis-yet` | `@keyv/redis` |
+
+> 最容易踩的就是 ttl 单位 —— 写 `ttl: 60` 以为是 60 秒，实际只缓存了 60 毫秒。
+
+### 四、环境变量
+
+```bash
+# .env.development
+REDIS_URL=redis://localhost:6379
+```
+
+校验规则加到 [app.module.ts](src/app.module.ts) 的 Joi schema 里，缺了直接拒绝启动：
+
+```ts
+REDIS_URL: Joi.string().uri().required(),
+```
+
+### 五、全局注册 CacheModule
+
+写在 [app.module.ts](src/app.module.ts) 里，`isGlobal: true` 后所有模块都能直接注入 `CACHE_MANAGER`，**无需重复 import**。
+
+```ts
+import { CacheModule } from '@nestjs/cache-manager';
+import { createKeyv } from '@keyv/redis';
+
+CacheModule.registerAsync({
+  isGlobal: true,            // 全局可用，业务模块无需再 import CacheModule
+  inject: [ConfigService],
+  useFactory: (config: ConfigService) => ({
+    // stores 接受 Keyv 实例数组，可同时挂多层（如本地 LRU + Redis）
+    // 这里只用 Redis 一层；ttl 单位是毫秒（v7 变更点，旧版是秒）
+    stores: [createKeyv(config.get<string>('REDIS_URL'))],
+    ttl: 60 * 1000,          // 默认缓存 60 秒
+  }),
+}),
+```
+
+> 💡 **全局 vs 非全局的区别**：`isGlobal` 影响的是 Nest 的 DI 容器（省掉每个模块写 `imports: [CacheModule]`），但 `import { CacheInterceptor } from '@nestjs/cache-manager'` 这种**符号引入**是 TS 语法层面的，永远要写。
+
+### 六、装饰器方式：在 Controller 中使用
+
+最常见的用法。GET 请求自动走缓存，参见 [cats.controller.ts](src/modules/cats/cats.controller.ts)。
+
+```ts
+import {
+  CacheInterceptor,   // 拦截 GET 请求，命中走缓存
+  CacheKey,           // 自定义缓存 key（不写则用 URL）
+  CacheTTL,           // 单独设置 ttl，毫秒
+} from '@nestjs/cache-manager';
+
+@UseInterceptors(CacheInterceptor)   // 控制器级别：所有 GET 都走缓存
+@Controller('cats')
+export class CatsController {
+  constructor(private readonly catsService: CatsService) {}
+
+  // 自定义 key + ttl
+  @CacheKey('cats')
+  @CacheTTL(60 * 1000)
+  @Get()
+  findAll() {
+    return this.catsService.findAll();
+  }
+
+  // 不写 @CacheKey 时，默认用完整 URL 当 key
+  // /cats/1、/cats/2 各占一份缓存
+  @CacheKey('catId')
+  @CacheTTL(60 * 1000)
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.catsService.findOne(+id);
+  }
+}
+```
+
+> 💡 `CacheInterceptor` **只缓存 GET**，POST / PATCH / DELETE 自动跳过，不会污染缓存。
+
+#### 三种注册范围
+
+| 范围 | 写法 | 适用场景 |
+| --- | --- | --- |
+| 单个方法 | 在方法上加 `@UseInterceptors(CacheInterceptor)` | 只想缓存某几个接口 |
+| 整个 Controller | 在 class 上加 `@UseInterceptors(CacheInterceptor)` | 控制器内所有 GET 都缓存（推荐） |
+| 全局 | `app.useGlobalInterceptors(app.get(CacheInterceptor))` | 全站 GET 默认缓存（慎用，写操作要手动清） |
+
+#### `@CacheKey` 的静态本质
+
+`@CacheKey('xxx')` 接收的是**字符串字面量**，无法读取请求参数动态拼 key。所以：
+
+- `findAll()` 用 `@CacheKey('cats')` 没问题，整个列表共享一份缓存
+- `findOne(:id)` 用 `@CacheKey('catId')` 会让 `/cats/1` 和 `/cats/2` **共用同一份缓存**，第二次请求拿到的是第一次的结果（这是个常见误用）
+- 想按 id 区分缓存，**要么去掉 `@CacheKey`** 让它默认用 URL 当 key，**要么改用手动注入方式**
+
+### 七、手动方式：在 Service 中操作缓存
+
+涉及业务逻辑、按字段拼动态 key、写操作清缓存时，要用手动注入。参见 [cats.service.ts](src/modules/cats/cats.service.ts)。
+
+```ts
+import { Inject, Injectable } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
+
+@Injectable()
+export class CatsService {
+  constructor(
+    // 因为 CacheModule 注册时 isGlobal: true，这里直接注入即可
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
+  ) {}
+
+  async findAll() {
+    // 缓存 key 用「资源:动作」风格，方便后续按前缀清理
+    const cacheKey = 'cats:findAll';
+
+    // 1. 先查缓存，命中直接返回
+    const cached = await this.cache.get<any>(cacheKey);
+    if (cached) return cached;
+
+    // 2. 未命中走原逻辑（DB / 远程接口）
+    const data = await this.fetchFromDb();
+
+    // 3. 写回缓存，ttl 单位毫秒
+    await this.cache.set(cacheKey, data, 30 * 1000);
+    return data;
+  }
+
+  async update(id: number, dto: UpdateCatDto) {
+    const cat = await this.prisma.cat.update({ where: { id }, data: dto });
+    // 写操作必须主动清缓存，否则后续 GET 会读到脏数据
+    await this.cache.del('cats:findAll');
+    return cat;
+  }
+}
+```
+
+#### Cache 实例核心 API
+
+| 方法 | 作用 | 备注 |
+| --- | --- | --- |
+| `cache.get<T>(key)` | 读取缓存 | 未命中返回 `undefined` |
+| `cache.set(key, value, ttl)` | 写入缓存 | ttl 单位**毫秒**，省略则用全局默认 |
+| `cache.del(key)` | 删除指定 key | 写操作后用，避免脏数据 |
+| `cache.clear()` | 清空全部缓存 | ⚠️ 慎用，影响所有模块 |
+
+### 八、装饰器 vs 手动注入
+
+| 维度 | 装饰器（CacheInterceptor） | 手动注入（CACHE_MANAGER） |
+| --- | --- | --- |
+| 写法 | 一行装饰器 | 几行模板代码 |
+| 控制粒度 | 粗：整个响应一起缓存 | 细：可按字段拼 key、分级缓存 |
+| 写操作自动清缓存 | ❌ 不会，要自己 `del` | ✅ 完全可控 |
+| key 是否支持动态拼接 | ❌ `@CacheKey` 是静态字面量 | ✅ 可拼 `user:${id}:profile` |
+| 推荐场景 | 纯 GET 列表 / 详情 | 涉及写操作、需要细粒度控制 |
+
+### 九、🕳️ 几个常见的坑
+
+1. **`ttl` 单位搞错**
+   v7 是**毫秒**，旧版是**秒**。`ttl: 60` 在 v7 里只缓存 60 毫秒，几乎不生效。
+
+2. **装错 Redis 包**
+   v7 必须用 `@keyv/redis`，不能用 `cache-manager-redis-yet` / `cache-manager-redis-store`。后者是 v6 时代的产物，v7 的 `stores` 字段类型不兼容。
+
+3. **CacheModule 不写 isGlobal，又在子模块重复 register**
+   每个模块各自 `registerAsync` 会创建**独立的 Redis 连接**，10 个模块就是 10 套连接池。
+   推荐：`isGlobal: true` 一次注册全局生效，或抽一个 `SharedCacheModule` 配置完后 `exports: [CacheModule]` 转发。
+
+4. **`@CacheKey('catId')` 用在带参数的 GET 上**
+   `/cats/1` 和 `/cats/2` 会**共用一份缓存**，第二次请求拿到的是第一次的结果。要么去掉 `@CacheKey` 用默认 URL key，要么改用手动注入。
+
+5. **写操作忘记清缓存**
+   `update` / `delete` 后没调 `cache.del`，下一次 GET 读到的还是旧数据。CacheInterceptor 不会帮你清，必须手动维护。
+
+6. **缓存穿透**
+   查询不存在的数据时，每次都会走 DB。防御方法：把「查不到」的结果也缓存一份（短 ttl，比如 5 秒），或上布隆过滤器。
+
+

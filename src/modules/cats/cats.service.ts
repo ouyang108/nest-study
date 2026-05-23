@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { CreateCatDto } from './dto/create-cat.dto';
 import { UpdateCatDto } from './dto/update-cat.dto';
 // 引入 UserService 类型，用于依赖注入（路径已更新到 modules/ 下）
 import { UserService } from 'src/modules/user/user.service';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 @Injectable()
 export class CatsService {
   // 通过构造函数注入 UserService
@@ -13,6 +15,7 @@ export class CatsService {
     private readonly userService: UserService,
     private readonly configService: ConfigService,
     private readonly primas: PrismaService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   create(createCatDto: CreateCatDto) {
@@ -49,7 +52,16 @@ export class CatsService {
     return `This action returns a #${id} cat`;
   }
 
-  update(id: number, updateCatDto: UpdateCatDto) {
+  async update(id: number, updateCatDto: UpdateCatDto) {
+    const key = `updateCatDto:${id}`;
+    // / 1. 先查缓存，命中直接返回
+    const cached = await this.cacheManager.get<UpdateCatDto>(key);
+    if (cached) return cached;
+    await this.cacheManager.set(
+      key,
+      `This action updates a #${id} cat`,
+      30 * 1000,
+    ); // 设置缓存，30 秒过期
     return `This action updates a #${id} cat`;
   }
 

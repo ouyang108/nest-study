@@ -14,6 +14,11 @@ import { CreateCatDto } from './dto/create-cat.dto';
 import { UpdateCatDto } from './dto/update-cat.dto';
 import { localErrorFilter } from 'src/exception/error-exception.filter';
 import { LocalExceptionFilter } from 'src/exception/exception.filter';
+import {
+  CacheInterceptor, // 拦截 GET 请求，命中走缓存
+  CacheKey, // 自定义缓存 key（不写则用 URL）
+  CacheTTL, // 单独设置 ttl，毫秒
+} from '@nestjs/cache-manager';
 // 局部过滤器
 @UseFilters(localErrorFilter) //
 // 或者 这两种写法都行 推荐用@UseFilters(localErrorFilter)
@@ -21,6 +26,8 @@ import { LocalExceptionFilter } from 'src/exception/exception.filter';
 
 // 局部拦截器
 @UseInterceptors(LocalExceptionFilter) // 这里可以放局部拦截器，例如 @UseInterceptors(LocalInterceptor)，如果没有局部拦截器，可以直接写 @UseInterceptors() 或者干脆不写
+// 缓存拦截器：命中走缓存，未命中走服务层
+@UseInterceptors(CacheInterceptor)
 @Controller('cats')
 export class CatsController {
   constructor(private readonly catsService: CatsService) {}
@@ -29,12 +36,17 @@ export class CatsController {
   create(@Body() createCatDto: CreateCatDto) {
     return this.catsService.create(createCatDto);
   }
-
+  // 自定义缓存 key（不写则用 URL）
+  @CacheKey('cats')
+  // 单独设置 ttl，毫秒
+  @CacheTTL(60 * 1000)
   @Get()
   findAll() {
     return this.catsService.findAll();
   }
 
+  @CacheKey('catId') // 这里的 key 是全局的，和 URL 无关；如果不写 @CacheKey，则默认用 URL 作为 key
+  @CacheTTL(60 * 1000)
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.catsService.findOne(+id);
