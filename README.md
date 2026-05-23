@@ -1124,4 +1124,232 @@ pnpm exec prisma generate
 
 ### 四、环境变量
 
-> 💡 本项目的 Prisma 读取的 `DATABASE_URL` 由 `package.json` 中的 `cross-env NODE_ENV=xxx` 间接控制——根据 `NODE_ENV` 加载对应的 `.env.{env}` 文件，例如 `start:dev` 加载 `.env.development`，`start:test` 加载 `.env.test`。
+> 💡 **环境感知机制：** 本项目的 Prisma 读取的 `DATABASE_URL` 由 `package.json` 中的 `cross-env NODE_ENV=xxx` 间接控制——根据 `NODE_ENV` 加载对应的 `.env.{env}` 文件，例如：
+>
+> - `start:dev` → 加载 `.env.development`
+> - `start:test` → 加载 `.env.test`
+> - `start:prod` → 加载 `.env.production`
+
+---
+
+### 五、模型字段迁移（Migration）
+
+修改 [prisma/schema.prisma](prisma/schema.prisma) 后，需要把变更**同步到数据库 + 重新生成 Client 类型**。
+
+#### 5.1 工作流
+
+```bash
+# 一步到位：生成迁移 SQL + 应用到数据库 +（v6 及以前会自动）生成 Client
+pnpm exec prisma migrate dev --name add_user_age
+```
+
+`--name` 后跟一段语义化描述（小写 + 下划线），会作为迁移文件夹名：`prisma/migrations/2026xxxx_add_user_age/`。
+
+#### 5.2 ⚠️ Prisma v7 的特殊行为
+
+新版 `prisma-client` provider **不会自动触发 `prisma generate`**，需要手动补一步：
+
+```bash
+pnpm exec prisma generate
+```
+
+否则 [src/generated/prisma/](src/generated/prisma/) 下的 TS 类型还是旧的，IDE 会报「`age` 不在类型中」。
+
+#### 5.3 命令速查
+
+| 命令 | 作用 | 适用场景 |
+| --- | --- | --- |
+| `prisma migrate dev --name xxx` | 生成迁移 + 应用 | **开发期改 schema 后** |
+| `prisma migrate deploy` | 仅应用已有迁移 | **生产部署** |
+| `prisma migrate reset` | 重置数据库 + 重跑所有迁移 + 自动种子 | 开发期数据乱了想重来（⚠️ 删全部数据） |
+| `prisma migrate status` | 查看迁移状态 | 排查「线上 schema 跟代码不一致」 |
+| `prisma db push` | 直接推 schema 到数据库（不生成迁移文件） | 原型期 / 试验期 |
+| `prisma db pull` | 反向：从数据库拉 schema | 接手老项目时 |
+| `prisma generate` | 仅重新生成 Client | 改完 schema 但不动数据库时 |
+
+> 🎯 **建议：** 在 [package.json](package.json) 加组合脚本，免得忘记 `generate`：
+>
+> ```json
+> {
+>   "scripts": {
+>     "db:migrate": "prisma migrate dev && prisma generate",
+>     "db:reset": "prisma migrate reset",
+>     "db:seed": "prisma db seed"
+>   }
+> }
+> ```
+
+---
+
+### 六、种子数据（Seed）
+
+种子脚本用于**给数据库填充初始数据**——字典表、默认管理员账号、开发测试数据等。
+
+#### 6.1 触发时机
+
+| 时机 | 说明 |
+| --- | --- |
+| `pnpm exec prisma db seed` | 手动触发 |
+| `pnpm exec prisma migrate reset` | 重置数据库后**自动**跑一次 |
+| `pnpm exec prisma migrate dev`（首次空库） | 第一次建库时**自动**跑 |
+
+#### 6.2 设计原则
+
+- **幂等**：多次执行结果一致，绝不能因重复执行导致数据混乱（用 `upsert` / `skipDuplicates`）
+- **环境感知**：测试假数据只在非生产环境写入，避免污染线上库
+- **自给自足**：脚本不依赖 Nest 容器，自行实例化 `PrismaClient`
+- **容错**：撞唯一约束（P2002）时降级查询，而不是让脚本崩溃
+
+#### 6.3 步骤一：安装执行器 `ts-node`
+
+```bash
+pnpm add -D ts-node
+```
+
+
+#### 6.4 步骤二：配置 [prisma.config.ts](prisma.config.ts)和[package.json](package.json)
+
+```typescript
+import 'dotenv/config';
+import { defineConfig } from 'prisma/config';
+
+export default defineConfig({
+  schema: 'prisma/schema.prisma',
+  migrations: {
+    path: 'prisma/migrations',
+    
+    // 触发命令：pnpm exec prisma db seed / prisma migrate reset
+    seed: 'bun ./prisma/seed.ts',
+  },
+  datasource: {
+    url: process.env['DATABASE_URL'],
+  },
+});
+```
+package.json 中添加 `bun` 到 `scripts`：
+
+```json
+{
+"prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  }
+},
+```
+
+#### 6.5 步骤三：编写 [prisma/seed.ts](prisma/seed.ts)
+
+完整脚本见仓库内文件，下面拆解三个关键片段：
+
+##### 🔹 初始化 Prisma Client（与运行时同款适配器）
+
+```typescript
+import 'dotenv/config';
+// 项目 tsconfig 是 nodenext，相对导入 TS 文件必须带 .js 后缀
+import { PrismaClient } from '../src/generated/prisma/client.js';
+import { PrismaPg } from '@prisma/adapter-pg';
+
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL as string,
+});
+const prisma = new PrismaClient({ adapter });
+```
+
+##### 🔹 容错 upsert：撞 P2002 时降级查询
+
+```typescript
+async function safeUpsertUser(
+  email: string,
+  data: Parameters<typeof prisma.user.upsert>[0]['create'],
+) {
+  try {
+    return await prisma.user.upsert({
+      where: { email },
+      update: {}, // 已存在时不修改任何字段
+      create: data,
+    });
+  } catch (e: unknown) {
+    // P2002 = 唯一约束冲突：说明记录已存在，直接查出来返回
+    const isUniqueErr =
+      e !== null &&
+      typeof e === 'object' &&
+      'code' in e &&
+      (e as { code?: string }).code === 'P2002';
+    if (isUniqueErr) {
+      const existing = await prisma.user.findUnique({ where: { email } });
+      if (existing) return existing;
+    }
+    throw e; // 其他错误照旧抛出
+  }
+}
+```
+
+##### 🔹 按环境分组写入
+
+```typescript
+async function seedRequired() {
+  // 字典数据 / 默认账号：所有环境都要有（含生产）
+  await safeUpsertUser('admin@example.com', {
+    email: 'admin@example.com',
+    name: 'Administrator',
+    age: 30,
+  });
+}
+
+async function seedDevOnly() {
+  // 测试数据：只在非生产环境写入
+  if (process.env.NODE_ENV === 'production') return;
+  await safeUpsertUser('alice@example.com', { /* ... */ });
+  await safeUpsertUser('bob@example.com', { /* ... */ });
+}
+
+async function main() {
+  await seedRequired();
+  await seedDevOnly();
+}
+
+main()
+  .catch((e) => {
+    console.error('❌ 种子执行失败：', e);
+    process.exit(1);
+  })
+  .finally(() => {
+    // 必须释放连接，否则脚本会挂住进程不退出
+    void prisma.$disconnect();
+  });
+```
+
+#### 6.6 步骤四：执行种子
+
+```bash
+# 方式 A：手动单独跑（最常用）
+pnpm exec prisma db seed
+
+# 方式 B：重置数据库 + 自动种子（开发期最爽）
+pnpm exec prisma migrate reset
+```
+
+#### 6.7 🕳️ 几个常见的坑
+
+1. **`Unique constraint failed (P2002)`**
+   库里已经有半截脏数据。两种处理：
+   - **重置库**：`pnpm exec prisma migrate reset`（开发期推荐）
+   - **写容错代码**：用 `safeUpsertUser` 兜底（见 6.5）
+
+2. **嵌套 `posts.create` 不是幂等的**
+   `upsert` 的 `update: {}` 只对父记录生效，已存在的 User 上**不会**重复创建文章——这是好事，但要意识到「重跑 ≠ 重新生成所有数据」。
+
+3. **`prisma.$disconnect()` 写在 `then` 里**
+   失败分支不会触发，导致脚本挂住。**永远写在 `finally` 里**。
+
+4. **种子里 `import { PrismaService }` 复用 Nest 服务**
+   种子是独立脚本，**不在 Nest 容器里**。要自己 `new PrismaClient()`，不能依赖 DI。
+
+#### 6.8 🎯 决策清单
+
+| 数据类型 | 是否加种子 | 备注 |
+| --- | --- | --- |
+| 字典表（角色、地区、分类） | ✅ 必加 | 每次重置都要有 |
+| 默认管理员账号 | ✅ 必加 | 密码用 `bcrypt` 加密后写入 |
+| 业务测试数据 | ✅ 加，但用 `NODE_ENV` 隔离生产 | 见 `seedDevOnly()` |
+| 一次性数据修复（洗历史数据） | ❌ 不要用种子 | 用一次性脚本或 SQL migration |
+
