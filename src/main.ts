@@ -25,9 +25,15 @@ import { InterceptorInterceptor } from './exception/exception.filter';
 // 引入全局异常过滤器（HttpException 统一格式化）
 import { InterceptorExceptionFilter } from './exception/error-exception.filter';
 // import { LoggerMiddleware } from './middleware/logger.middleware';
+
+// ws
+import { WsAdapter } from '@nestjs/platform-ws';
 async function bootstrap() {
   // 创建 Nest 应用实例
   const app = await NestFactory.create(AppModule);
+  // WHY: 必须把 app 实例传给 WsAdapter，让它复用 HTTP 服务的端口（process.env.PORT）
+  // 不传的话 WsAdapter 不会挂到 HTTP server 上，gateway 又没指定 port，ws 服务就「没绑端口」连不上
+  app.useWebSocketAdapter(new WsAdapter(app));
   // app.use(LoggerMiddleware); // 全局使用 LoggerMiddleware 中间件，记录每个请求的日志
   // 开启DTO验证管道：自动验证请求体数据是否符合 DTO 定义的规则，验证失败会抛出异常
   app.useGlobalPipes(

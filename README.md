@@ -1070,6 +1070,293 @@ export class PublicCatDto extends OmitType(CreateCatDto, ['ownerEmail'] as const
 - **错误文案要给前端展示** → 装饰器都加 `{ message: '...' }`，过滤器从 `getResponse().message` 取数组
 
 
+# websocket 篇
+
+> 本章只讲**原生 ws**（`@nestjs/platform-ws`）。socket.io 体积大、客户端必须装 SDK，暂不收录。
+
+## 一、依赖安装
+
+```bash
+# Nest 通用网关装饰器（@WebSocketGateway / @SubscribeMessage 等）
+pnpm add @nestjs/websockets
+
+# 选用原生 ws 协议时必装：Nest 的 ws 适配器
+pnpm add @nestjs/platform-ws
+
+# ⚠️ 按需可选：只有你自己代码要 `import { WebSocket } from 'ws'` 时才装
+# 不装的话，可以用本地 interface 兜底类型（见后面 Gateway 示例的 WsClient/WsServer）
+pnpm add ws
+pnpm add -D @types/ws
+```
+
+### 为什么 ws 是「按需可选」
+
+`ws` 库其实是 `@nestjs/platform-ws` 的**间接依赖**，pnpm install 时已经自动把它拉进 `node_modules/.pnpm/ws@x.x.x/` 了。但能不能在**你自己代码里** `import 'ws'`，取决于包管理器：
+
+| 包管理器 | 行为 | 你能直接 `import 'ws'` 吗 |
+| --- | --- | --- |
+| **pnpm**（严格） | 间接依赖隔离在 `.pnpm/` 下 | ❌ 不行，必须自己 `pnpm add ws` |
+| **npm / yarn classic** | 默认 hoist 到顶层 `node_modules/ws` | ✅ 能（但属于「幽灵依赖」反模式） |
+
+所以两条路：
+
+- **想要官方类型 + 严格写法**：装 `ws` + `@types/ws`，代码里直接 `import { WebSocket, Server } from 'ws'`
+- **不想多装包**：用本地 interface 顶替（见下面示例），运行时根本不需要从 'ws' import 任何东西，`@nestjs/platform-ws` 内部自己会用 ws，跟你无关
+
+> 💡 `@types/ws` 是**纯编译期类型**，运行时不需要。不装顶多 IDE 没提示，不影响功能。
+
+## 二、main.ts 注册 WsAdapter
+
+```typescript
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { WsAdapter } from '@nestjs/platform-ws';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  // ⚠️ 必须把 app 实例传进去！
+  // WHY: 不传 app，WsAdapter 不会复用 HTTP server 的端口；
+  // 而 @WebSocketGateway 又通常不指定 port，结果就是 ws 服务「没绑端口」连不上
+  app.useWebSocketAdapter(new WsAdapter(app));
+
+  await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
+}
+bootstrap();
+```
+
+### 端口和路径的关系
+
+- **不传 `port`**（推荐）：ws 复用 HTTP 端口，客户端连 `ws://host:HTTP_PORT/<path>`
+- **传 `port`**：ws 单独起一个端口（少用，多开端口意味着多一份防火墙/反代配置）
+
+## 三、Gateway 完整示例
+
+```typescript
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+  OnGatewayInit,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+} from '@nestjs/websockets';
+import { Logger } from '@nestjs/common';
+import { WebSocket, Server } from 'ws';
+
+@WebSocketGateway({
+  // port: 3001,                // 不写就复用 HTTP 端口
+  path: '/ws/chat',            // 客户端连接地址：ws://host:PORT/ws/chat
+  cors: { origin: '*' },       // 开发期放开；生产务必收紧
+})
+export class ChatGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
+  private readonly logger = new Logger(ChatGateway.name);
+
+  // WHY: 自己维护在线连接表。platform-ws 没有 socket.io 的 rooms/sockets.get(id)
+  private readonly clients = new Map<string, WebSocket>();
+
+  // WHY: 注入底层 ws.Server，用于遍历 server.clients 做广播
+  @WebSocketServer() server!: Server;
+
+  // ============ 生命周期钩子 ============
+
+  afterInit(server: Server) {
+    this.logger.log(`WS 网关已启动，当前连接数: ${server.clients.size}`);
+  }
+
+  handleConnection(client: WebSocket) {
+    // WHY: ws 原生没有 client.id，自己生成挂上去
+    const clientId = `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    (client as any).id = clientId;
+    this.clients.set(clientId, client);
+
+    this.logger.log(`客户端连接: ${clientId}`);
+    this.sendTo(client, 'welcome', { clientId });
+  }
+
+  handleDisconnect(client: WebSocket) {
+    const clientId = (client as any).id as string;
+    this.clients.delete(clientId);
+    this.logger.log(`客户端断开: ${clientId}`);
+  }
+
+  // ============ 消息处理 ============
+
+  @SubscribeMessage('createChat')
+  create(
+    @MessageBody() dto: { content: string },
+    @ConnectedSocket() client: WebSocket,
+  ) {
+    const clientId = (client as any).id as string;
+    this.logger.log(`收到消息 from ${clientId}: ${JSON.stringify(dto)}`);
+
+    // 业务广播
+    this.broadcast('newMessage', { from: clientId, payload: dto });
+
+    // WHY: return 的值会作为 ACK 自动包装成 { event:'createChat', data: 返回值 } 回给发送者
+    return { ok: true };
+  }
+
+  // ============ 工具方法 ============
+
+  /** 广播给所有在线客户端 */
+  private broadcast(event: string, data: unknown) {
+    const payload = JSON.stringify({ event, data });
+    this.server.clients.forEach((c) => {
+      // WHY: 只给已就绪连接发，避免给握手/关闭中的连接 send 抛错
+      if (c.readyState === WebSocket.OPEN) c.send(payload);
+    });
+  }
+
+  /** 单播 */
+  private sendTo(client: WebSocket, event: string, data: unknown) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ event, data }));
+    }
+  }
+}
+```
+
+别忘了在 module 里注册：
+
+```typescript
+@Module({
+  providers: [ChatGateway, ChatService],
+})
+export class ChatModule {}
+```
+
+## 四、消息协议约定（最容易踩的坑）
+
+### 客户端 → 服务端：必须是 `{event, data}` JSON 字符串
+
+```javascript
+// ❌ 这些都会被 platform-ws 静默丢弃，不报错、不打印
+ws.send('hello');                                         // 不是 JSON
+ws.send({ event: 'createChat', data: {} });               // 没 JSON.stringify
+ws.send(JSON.stringify({ type: 'createChat', data: {} }));// 字段名不是 event
+ws.send(JSON.stringify({ event: 'create', data: {} }));   // event 名和 @SubscribeMessage 对不上
+
+// ✅ 唯一正确写法
+ws.send(JSON.stringify({ event: 'createChat', data: { content: 'hi' } }));
+```
+
+### 服务端 → 客户端：return 值自动包装
+
+`@SubscribeMessage` handler 里 `return result` 会被框架包成：
+
+```json
+{ "event": "createChat", "data": <返回值> }
+```
+
+主动 push 时，必须自己手动包格式（见上面的 `broadcast` / `sendTo`）。
+
+### 为什么必须这格式？
+
+WebSocket 协议层只有 `send(data)` / `onmessage(data)`，**没有 event 概念**。
+而 `@SubscribeMessage('createChat')` 这种"按事件名路由"是 NestJS 框架自己造的抽象，所以框架必须强制一个协议约定，才能从消息里解析出"要路由到哪个 handler"。
+
+平台对照：
+
+| 框架 | 客户端发送约定 |
+| --- | --- |
+| 原生 WebSocket | 无（纯字节流） |
+| `@nestjs/platform-ws` | `JSON.stringify({event, data})` |
+| `@nestjs/platform-socket.io` | socket.io 自定义二进制协议 |
+| Spring `@MessageMapping` | STOMP 协议帧 |
+
+## 五、客户端最小测试代码
+
+浏览器 F12 控制台直接跑：
+
+```javascript
+const ws = new WebSocket('ws://localhost:3000/ws/chat');
+
+ws.onopen = () => {
+  console.log('✅ 连上了');
+  ws.send(JSON.stringify({ event: 'createChat', data: { content: 'hi' } }));
+};
+ws.onmessage = (e) => console.log('收到:', JSON.parse(e.data));
+ws.onerror = (e) => console.log('❌ error', e);
+ws.onclose = (e) => console.log('🔌 close', e.code, e.reason);
+```
+
+## 六、两种写法对比：`@SubscribeMessage` vs 裸 message 监听
+
+如果客户端发的不是 `{event, data}` 格式（比如对接老接口 `ws.send('123')`），可以**不用 `@SubscribeMessage`**，直接在 `handleConnection` 里监听原生 `message` 事件：
+
+```typescript
+handleConnection(client: WebSocket) {
+  // WHY: 等价于 Spring 的 TextWebSocketHandler.handleTextMessage
+  client.on('message', (raw: Buffer) => {
+    const text = raw.toString();
+    console.log('收到:', text);  // ws.send('123') 这里就能拿到 '123'
+
+    // 自己解析、自己路由
+    if (text === 'ping') client.send('pong');
+    else if (text.startsWith('CHAT:')) { /* ... */ }
+  });
+}
+```
+
+对比：
+
+| 维度 | 裸 `client.on('message')` | `@SubscribeMessage` |
+| --- | --- | --- |
+| 客户端发什么格式 | 任意（字符串/二进制） | 必须 `{event, data}` JSON |
+| 消息分发 | 自己 if/else | 框架按 event 名自动路由 |
+| DTO 验证（class-validator） | ❌ 用不上 | ✅ 自动跑 |
+| 全局拦截器/异常过滤器 | ❌ 用不上 | ✅ 自动跑 |
+| 适合场景 | 兼容老接口、私有协议、二进制游戏帧 | 业务事件多、复用 Nest 全家桶 |
+
+**新项目优先 `@SubscribeMessage`**，事件多了自己 if/else 路由会变噩梦。
+
+## 七、🕳️ 几个常见的坑
+
+### 坑 1：`new WsAdapter()` 没传 app
+
+```typescript
+app.useWebSocketAdapter(new WsAdapter());      // ❌ ws 服务没绑端口，连不上
+app.useWebSocketAdapter(new WsAdapter(app));   // ✅
+```
+
+### 坑 2：客户端发了消息但 handler 不触发
+
+90% 是消息格式不对，platform-ws 静默丢弃。
+**排查办法**：在 `handleConnection` 里临时加 `client.on('message', raw => console.log(raw.toString()))`，能看到原始字符串，对照第四节的对照表定位。
+
+### 坑 3：路径大小写敏感
+
+`@WebSocketGateway({ path: '/ws/chat' })` 和客户端 `ws://host:port/ws/chat` 必须完全一致，`/WS/Chat` 连不上。
+
+### 坑 4：原生 ws 没有这些 socket.io 特性
+
+需要自己实现：
+
+- **房间 rooms**：用 `Map<roomName, Set<clientId>>` 自己维护
+- **自动重连**：客户端自己写 `onclose` 后 `setTimeout` 重连
+- **ACK 回执**：只能靠 `@SubscribeMessage` 的 return 值（一次性，没有 socket.io 那种带 callback 的 emit）
+- **命名空间**：只能用不同 `path` 区分
+
+需求复杂到这些都要时，**优先考虑换 `@nestjs/platform-socket.io`**。
+
+### 坑 5：广播时不判断 readyState
+
+直接 `client.send(...)` 给一个正在握手或关闭中的连接会抛 `Error: WebSocket is not open`。必须先判：
+
+```typescript
+if (client.readyState === WebSocket.OPEN) client.send(payload);
+```
+
+
+
+
+
+
 
 # 数据库篇
 

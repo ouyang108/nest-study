@@ -4,6 +4,7 @@ import { AppService } from './app.service';
 // 业务模块统一从 modules/ 下引入
 import { CatsModule } from './modules/cats/cats.module';
 import { UserModule } from './modules/user/user.module';
+import { ChatModule } from './modules/chat/chat.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
 // 引入全局日志中间件
@@ -58,6 +59,7 @@ console.log('当前环境:', process.env.NODE_ENV); // 输出当前环境变量�
     }),
     CatsModule,
     UserModule,
+    ChatModule,
     // PrismaModule,
   ],
   controllers: [AppController],
