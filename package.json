@@ -31,6 +31,7 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/platform-socket.io": "^11.1.23",
     "@nestjs/platform-ws": "^11.1.23",
     "@nestjs/websockets": "^11.1.23",
     "@prisma/adapter-pg": "^7.8.0",
@@ -45,7 +46,8 @@
     "keyv": "^5.6.0",
     "pg": "^8.21.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

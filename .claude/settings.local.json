@@ -9,7 +9,9 @@
       "Bash(awk 'NR<=1019 { if\\(/^```/\\){inblock=!inblock; next} if\\(inblock && /^#/\\) print NR\": \"$0 }' \"e:/daima/gitee/nest-study/README.md\")",
       "Bash(awk 'BEGIN{in_block=0} NR==1{print \"# NestJS 篇\"; print \"\"} {if\\(/^```/\\) in_block=!in_block; if\\(NR<=1019 && !in_block && /^#+ /\\) sub\\(/^#/,\"##\"\\); print}' README.md)",
       "Bash(mv README.md.new README.md)",
-      "PowerShell(Move-Item -Path \"e:\\\\daima\\\\gitee\\\\nest-study\\\\src\\\\chat\" -Destination \"e:\\\\daima\\\\gitee\\\\nest-study\\\\src\\\\modules\\\\chat\" -Force)"
+      "PowerShell(Move-Item -Path \"e:\\\\daima\\\\gitee\\\\nest-study\\\\src\\\\chat\" -Destination \"e:\\\\daima\\\\gitee\\\\nest-study\\\\src\\\\modules\\\\chat\" -Force)",
+      "Bash(sed -i '1320,1360 s/^### 坑/#### 坑/' README.md)",
+      "Bash(grep -n \"^#\\\\{1,4\\\\} \" README.md)"
     ]
   }
 }

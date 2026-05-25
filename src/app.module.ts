@@ -5,12 +5,17 @@ import { AppService } from './app.service';
 import { CatsModule } from './modules/cats/cats.module';
 import { UserModule } from './modules/user/user.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { ChatioModule } from './modules/chatio/chatio.module';
+
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
+
 // 引入全局日志中间件
 import { LoggerMiddleware } from './middleware/logger.middleware';
+
 // 引入 Prisma 全局模块，注册后会触发数据库连接校验
 import { PrismaModule } from './prisma/prisma.module';
+
 // cache-manager v7 体系：CacheModule 来自 @nestjs/cache-manager，
 // 底层存储改用 Keyv（@keyv/redis）。createKeyv 帮我们把 redis URL 直接转成 Keyv 实例
 import { CacheModule } from '@nestjs/cache-manager';
@@ -60,6 +65,7 @@ console.log('当前环境:', process.env.NODE_ENV); // 输出当前环境变量�
     CatsModule,
     UserModule,
     ChatModule,
+    ChatioModule,
     // PrismaModule,
   ],
   controllers: [AppController],
