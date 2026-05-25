@@ -26,26 +26,32 @@ export class CatsService {
   }
 
   async findAll() {
-    // 抛出错误
-    // throw new HttpException('这是局部错误过滤器', 400);
-    // 示例：调用 UserService 的方法
-    const users = this.userService.findAll();
-    const message = this.configService.get<string>('PORT'); // 从配置服务中获取 JWT_SECRET 的值
-    const DATABASE_URL = this.configService.get<string>('DATABASE_URL'); // 从配置服务中获取 JWT_SECRET 的值
-    const xyz_shared_key_123 =
-      this.configService.get<string>('xyz_shared_key_123'); // 从配置服务中获取 xyz_shared_key_123 的值
-    // 查找user表的所有数据
-    const result = await this.primas.user.findMany();
-    return {
-      data: {
-        msg: `This action returns all cats`,
-        users,
-        message,
-        DATABASE_URL,
-        xyz_shared_key_123,
-        result,
-      },
-    };
+    try {
+      // 抛出错误
+      // throw new HttpException('这是局部错误过滤器', 400);
+      // 示例：调用 UserService 的方法
+      const users = this.userService.findAll();
+      const message = this.configService.get<string>('PORT'); // 从配置服务中获取 JWT_SECRET 的值
+      const DATABASE_URL = this.configService.get<string>('DATABASE_URL'); // 从配置服务中获取 JWT_SECRET 的值
+      const xyz_shared_key_123 =
+        this.configService.get<string>('xyz_shared_key_123'); // 从配置服务中获取 xyz_shared_key_123 的值
+      // 查找user表的所有数据
+      const result = await this.primas.user.findMany();
+      return {
+        data: {
+          msg: `This action returns all cats`,
+          users,
+          message,
+          DATABASE_URL,
+          xyz_shared_key_123,
+          result,
+        },
+      };
+    } catch (error) {
+      // 处理错误，例如记录日志或返回默认值
+      console.error('Error in findAll:', error);
+      throw error; // 或者 return { data: null, error: 'Failed to fetch cats' };
+    }
   }
 
   findOne(id: number) {

@@ -18,7 +18,7 @@ node_modules
 # Tests
 /coverage
 /.nyc_output
-
+.env.development
 # IDEs and editors
 /.idea
 .project

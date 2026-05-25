@@ -34,6 +34,9 @@ import { WsAdapter } from '@nestjs/platform-ws';
 async function bootstrap() {
   // 创建 Nest 应用实例
   const app = await NestFactory.create(AppModule);
+  // 跨域
+  app.enableCors();
+
   // WHY: 必须把 app 实例传给 WsAdapter，让它复用 HTTP 服务的端口（process.env.PORT）
   // 不传的话 WsAdapter 不会挂到 HTTP server 上，gateway 又没指定 port，ws 服务就「没绑端口」连不上
   // app.useWebSocketAdapter(new WsAdapter(app));

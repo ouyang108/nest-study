@@ -16,10 +16,38 @@ export class PrismaService
   private readonly logger = new Logger(PrismaService.name);
 
   constructor() {
-    // 使用 pg 适配器，连接字符串从环境变量读取
-    const adapter = new PrismaPg({
-      connectionString: process.env.DATABASE_URL as string,
-    });
+    // 使用 pg 适配器
+    // 第一个参数是 pg.PoolConfig：连接字符串 + 池行为
+    // 第二个参数是 PrismaPgOptions：Prisma 适配器自己的钩子（错误监听等）
+    const adapter = new PrismaPg(
+      {
+        connectionString: process.env.DATABASE_URL as string,
+        // 池上限：本地开发 10 个足够；上线再按 DB 实例的 max_connections 调
+        max: 10,
+        // 关键：空闲 30s 后池主动关连接
+        // 比对端（防火墙 / NAT / postgres idle_timeout / 电脑休眠唤醒）先动手，
+        // 避免下次 acquire 拿到对端已经关掉的死连接，
+        // 触发 "Connection terminated unexpectedly"
+        idleTimeoutMillis: 30_000,
+        // 建立新连接最多等 5s，超时直接失败，
+        // 而不是让业务请求无限挂起
+        connectionTimeoutMillis: 5_000,
+        // 启用 TCP keepalive，让 OS 层周期性探活，
+        // 帮助更早发现僵尸连接（部分场景比 idleTimeout 更早生效）
+        keepAlive: true,
+      },
+      {
+        // 池本身的异常（连不上、健康检查失败等）走这里
+        // 没有监听器的话 pg.Pool 的 error 事件会冒泡为 unhandled，可能直接挂掉进程
+        onPoolError: (err) => {
+          this.logger.error('pg 连接池错误', err.stack ?? String(err));
+        },
+        // 某条连接运行中报错走这里（区别于查询语句报错）
+        onConnectionError: (err) => {
+          this.logger.error('pg 连接级错误', err.stack ?? String(err));
+        },
+      },
+    );
     super({ adapter });
   }
 

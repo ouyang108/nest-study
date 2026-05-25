@@ -1600,6 +1600,304 @@ pnpm add @socket.io/redis-adapter
 
 
 
+# SSE 篇
+
+## Server-Sent Events（@nestjs/common 内置）
+
+> 项目示例：[nest/src/modules/sse](nest/src/modules/sse) · 前端：[front/src/views/SseView.vue](front/src/views/SseView.vue)
+
+### 一、SSE 是什么 / 何时用
+
+SSE（Server-Sent Events）是一个跑在标准 HTTP 协议上的**单向**推送通道：服务端 → 客户端持续吐数据，浏览器用原生 `EventSource` 接收，自带断线重连和 `Last-Event-ID` 续传机制，零依赖。
+
+| 维度 | SSE | WebSocket |
+| --- | --- | --- |
+| 通信方向 | 单向（服务端 → 客户端） | 双向全双工 |
+| 协议 | HTTP（`text/event-stream`） | 独立 ws 协议 |
+| 浏览器 API | 原生 `EventSource` | 原生 `WebSocket` |
+| 自动重连 | ✅ 内置 | ❌ 自己实现 |
+| 跨域 | 走 HTTP CORS | 单独握手协商 |
+| 二进制支持 | ❌ 仅文本 | ✅ |
+| 适用场景 | 通知推送、日志流、AI 流式输出、行情 | 聊天、协同编辑、游戏 |
+
+**一句话决策**：客户端只「听」不「说」就用 SSE，要双向就上 WebSocket。
+
+### 二、后端实现：`@Sse()` + RxJS Observable
+
+NestJS 在 `@nestjs/common` 里已经内置 SSE 装饰器，不需要装额外依赖。
+
+#### 2.1 Service：构造 `Observable<MessageEvent>`
+
+```ts
+// nest/src/modules/sse/sse.service.ts
+import { Injectable, MessageEvent } from '@nestjs/common';
+import { interval, map, Observable, Subject } from 'rxjs';
+
+@Injectable()
+export class SseService {
+  // 广播总线：业务层调 push() 后，所有订阅的 SSE 客户端都能收到
+  // WHY: Subject 天然能转 Observable 给 @Sse() 用，比 EventEmitter 更顺
+  private readonly stream$ = new Subject<MessageEvent>();
+
+  // 定时推送：每秒一条递增序号
+  getTickStream(): Observable<MessageEvent> {
+    return interval(1000).pipe(
+      map((n) => ({
+        data: { count: n, time: new Date().toISOString() }, // 必填，会被自动 JSON.stringify
+        type: 'tick', // 可选，对应前端 addEventListener(type, ...)
+        id: String(n), // 可选，断线重连时通过 Last-Event-ID 头恢复
+      })),
+    );
+  }
+
+  // 外部调用此方法广播消息
+  push(data: unknown, type = 'message') {
+    this.stream$.next({ data, type } as MessageEvent);
+  }
+}
+```
+
+#### 2.2 Controller：`@Sse()` 替代 `@Get()`
+
+```ts
+// nest/src/modules/sse/sse.controller.ts
+import { Controller, MessageEvent, Sse } from '@nestjs/common';
+import { Observable } from 'rxjs';
+import { SseService } from './sse.service';
+
+@Controller('sse')
+export class SseController {
+  constructor(private readonly sseService: SseService) {}
+
+  // 关键点：
+  //   1. 用 @Sse() 替代 @Get()，Nest 自动设置 Content-Type: text/event-stream
+  //   2. 返回值必须是 Observable<MessageEvent>
+  //   3. 客户端断开时 Observable 自动 unsubscribe，无需手动清理
+  @Sse('tick')
+  tick(): Observable<MessageEvent> {
+    return this.sseService.getTickStream();
+  }
+}
+```
+
+#### 2.3 别忘了把模块挂到 AppModule
+
+```ts
+// nest/src/app.module.ts
+import { SseModule } from './modules/sse/sse.module';
+
+@Module({
+  imports: [..., SseModule], // 漏掉就是 404，控制器存在但 Nest 不知道
+})
+export class AppModule {}
+```
+
+#### 2.4 `MessageEvent` 字段速查
+
+| 字段 | 必填 | 作用 |
+| --- | --- | --- |
+| `data` | ✅ | 推送的数据，字符串或可 JSON 序列化对象 |
+| `type` | ❌ | 事件名，前端用 `addEventListener(type, ...)` 监听 |
+| `id` | ❌ | 事件 ID，断线重连时通过 `Last-Event-ID` 头回传 |
+| `retry` | ❌ | 浏览器重连等待毫秒数 |
+
+### 三、🕳️ 最大的坑：全局响应拦截器会破坏 SSE
+
+这个坑专门记一下，因为现象很迷惑。
+
+#### 3.1 现象
+
+前端 `new EventSource('http://localhost:4000/sse/tick')` 一连上就触发 `onerror`，`readyState` 直接变成 `CLOSED`，打印 "[SSE] 连接已关闭"。
+
+#### 3.2 根因
+
+如果项目里注册了**全局响应拦截器**（比如 [exception.filter.ts](nest/src/exception/exception.filter.ts) 里的 `InterceptorInterceptor`），它会用 `pipe(map(...))` 把控制器返回的每个值包成统一响应结构：
+
+```ts
+return next.handle().pipe(
+  map((data) => ({
+    timestamp, path, message, code: 200, success: true, data: ...,
+  })),
+);
+```
+
+对普通接口没问题，但 SSE 端点返回的是 `Observable<MessageEvent>`，拦截器对 **每一条** MessageEvent 都做包装，结果发出去的不再是合法 `{data, type, id}` 结构，浏览器收到非法 SSE 格式立即关流。
+
+#### 3.3 修复：拦截器内部判断，命中 SSE 就放行
+
+```ts
+// nest/src/exception/exception.filter.ts
+// @Sse() 装饰器会在 handler 上 defineMetadata('sse', true, ...)
+// key 名 'sse' 是 Nest 内部约定，没有 public 常量，硬编码即可
+const SSE_METADATA_KEY = 'sse';
+
+@Injectable()
+export class InterceptorInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    // SSE 端点必须跳过统一响应包装，让 MessageEvent 原样透传
+    const isSse = Reflect.getMetadata(
+      SSE_METADATA_KEY,
+      context.getHandler(),
+    ) as boolean | undefined;
+    if (isSse) {
+      return next.handle();
+    }
+
+    // 普通端点继续走统一包装逻辑
+    return next.handle().pipe(map((data) => ({ /* ... */ })));
+  }
+}
+```
+
+> 同样的思路也适用于全局异常过滤器：如果 SSE 端点抛错被过滤器包成 JSON，浏览器也会报协议错误。按需做同样的 `Reflect.getMetadata('sse', ...)` 判断即可。
+
+### 四、前端实现：原生 `EventSource`
+
+零依赖，直接用浏览器原生 API：
+
+```ts
+// front/src/views/SseView.vue（节选）
+const es = new EventSource('http://localhost:4000/sse/tick', {
+  withCredentials: false, // 跨域要带 cookie 时改 true，后端 CORS 也要放行 credentials
+});
+
+// 监听默认 message 事件（服务端没指定 type 时落这里）
+es.onmessage = (e) => console.log(e.data, e.lastEventId);
+
+// 监听自定义 type 事件（服务端 type: 'tick'）
+es.addEventListener('tick', (e) => {
+  console.log('tick:', JSON.parse(e.data));
+});
+
+// EventSource 自动重连：网络断了会进入 CONNECTING 状态，无需手动处理
+es.onerror = () => {
+  if (es.readyState === EventSource.CONNECTING) {
+    console.log('浏览器正在自动重连...');
+  } else if (es.readyState === EventSource.CLOSED) {
+    console.log('连接已关闭'); // 服务端 4xx/5xx 或协议错误会落这里
+  }
+};
+
+// 主动关闭（关闭后 readyState 永久为 CLOSED，不会再重连）
+// es.close();
+```
+
+#### `readyState` 三种状态
+
+| 值 | 名称 | 含义 |
+| --- | --- | --- |
+| 0 | CONNECTING | 正在连接 / 自动重连中 |
+| 1 | OPEN | 已连接 |
+| 2 | CLOSED | 已关闭（主动 close 或不可恢复错误） |
+
+### 五、命令行验证
+
+不写前端时用 `curl` 最快：
+
+```bash
+curl -N http://localhost:4000/sse/tick
+```
+
+`-N` 关闭缓冲，正常应该看到：
+
+```
+id: 0
+event: tick
+data: {"count":0,"time":"..."}
+
+id: 1
+event: tick
+data: {"count":1,"time":"..."}
+```
+
+如果输出是被包成 JSON 的 `{"timestamp":...,"data":...}`，立刻去看上面的「坑 3」。
+
+### 六、🕳️ 几个常见的坑
+
+#### 坑 1：模块没挂到 AppModule
+
+`SseController` 存在但访问 404 —— 检查 `app.module.ts` 的 `imports` 数组有没有 `SseModule`。Nest 路由发现机制只扫描 imports 里出现过的 Module。
+
+#### 坑 2：全局拦截器/过滤器破坏 SSE 格式
+
+见上面第三节，必须在拦截器/过滤器内部用 `Reflect.getMetadata('sse', context.getHandler())` 跳过 SSE 端点。
+
+#### 坑 3：跨域时 `withCredentials` 与后端 CORS 不匹配
+
+前端 `withCredentials: true` 时，后端 `app.enableCors({ origin: '具体源', credentials: true })` 必须配对，不能用 `origin: '*'`，否则浏览器拒收。
+
+#### 坑 4：反向代理缓冲了响应
+
+Nginx 默认开 `proxy_buffering`，会把 SSE 流缓存起来批量下发，前端看起来像「卡住」。SSE 端点的 location 需要关：
+
+```nginx
+location /sse {
+  proxy_pass http://nest;
+  proxy_buffering off;
+  proxy_cache off;
+  proxy_set_header Connection '';
+  proxy_http_version 1.1;
+  chunked_transfer_encoding off;
+}
+```
+
+#### 坑 5：Compression 中间件压缩了 SSE
+
+如果用了 `compression()` 中间件，它会缓冲响应再压缩，破坏 SSE 的实时性。需要在 filter 里跳过 `text/event-stream`：
+
+```ts
+app.use(compression({
+  filter: (req, res) => res.getHeader('Content-Type') !== 'text/event-stream',
+}));
+```
+
+#### 坑 6：浏览器同源限制：同一域名最多 6 个 SSE 连接
+
+HTTP/1.1 下浏览器对同一 origin 限制并发连接数（通常 6 个），多开标签页会卡。HTTP/2 下没有这个限制。开发期注意。
+
+### 七、进阶：按用户推送 / 心跳保活
+
+#### 7.1 按用户 ID 推送
+
+用 `Map<userId, Subject>`，每个用户一个独立流：
+
+```ts
+private readonly userStreams = new Map<string, Subject<MessageEvent>>();
+
+getUserStream(userId: string): Observable<MessageEvent> {
+  if (!this.userStreams.has(userId)) {
+    this.userStreams.set(userId, new Subject());
+  }
+  return this.userStreams.get(userId)!.asObservable();
+}
+
+pushToUser(userId: string, data: unknown) {
+  this.userStreams.get(userId)?.next({ data } as MessageEvent);
+}
+```
+
+控制器从 `@Req()` 或 JWT 拿到 userId 后调 `getUserStream(userId)` 即可。
+
+#### 7.2 心跳保活
+
+某些代理（云厂商 LB、Nginx 默认 60s）会把空闲连接干掉，定期发个空注释保活即可：
+
+```ts
+import { merge } from 'rxjs';
+
+@Sse('tick')
+tick(): Observable<MessageEvent> {
+  // 注释行 ': ping' 在 SSE 协议里是合法且会被浏览器忽略的占位
+  const heartbeat$ = interval(30_000).pipe(
+    map(() => ({ data: '', type: 'ping' } as MessageEvent)),
+  );
+  return merge(this.sseService.getTickStream(), heartbeat$);
+}
+```
+
+
+
+
 # 数据库篇
 
 ## PostgreSQL + Prisma

@@ -45,10 +45,7 @@ const transformBigInt = (obj: unknown): unknown => {
 
 @Injectable()
 export class InterceptorInterceptor implements NestInterceptor {
-  intercept(
-    context: ExecutionContext,
-    next: CallHandler,
-  ): Observable<ResponseBody> {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const ctx = context.switchToHttp();
     const request = ctx.getRequest<Request>();
 
