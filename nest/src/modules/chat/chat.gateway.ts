@@ -124,7 +124,7 @@ export class ChatGateway
 
   /** 网关初始化完成（server 已就绪） */
   afterInit(server: WsServer) {
-    this.logger.log(`WebSocket 网关已启动，当前连接数: ${server.clients.size}`);
+    this.logger.log(`WebSocket 网关已启动`);
   }
 
   /** 客户端连接进来时触发 */
@@ -134,7 +134,7 @@ export class ChatGateway
     client.id = clientId;
     this.clients.set(clientId, client);
 
-    this.logger.log(`客户端连接: ${clientId}, 在线数: ${this.clients.size}`);
+    this.logger.log(`客户端连接: ${clientId},`);
 
     // // ============ 调试：打印所有原始消息 ============
     // // WHY: 排查「客户端发了但 @SubscribeMessage 没触发」时用，能看到 platform-ws
