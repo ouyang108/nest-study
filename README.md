@@ -1069,6 +1069,188 @@ export class PublicCatDto extends OmitType(CreateCatDto, ['ownerEmail'] as const
 - **DTO 复杂、想精准控制** → 老老实实写 `@Type()`，规则清晰可读
 - **错误文案要给前端展示** → 装饰器都加 `{ message: '...' }`，过滤器从 `getResponse().message` 取数组
 
+## 文件上传
+
+> Nest 文件上传基于 [multer](https://github.com/expressjs/multer) 中间件，通过拦截器（Interceptor）把解析后的文件对象注入到 handler 参数中。单文件用 `FileInterceptor`，多文件用 `FilesInterceptor`，不同字段各一个文件用 `FileFieldsInterceptor`。
+
+### 📦 安装依赖
+
+```bash
+# multer 本体（Express 默认已内置，通常不用额外装）
+pnpm add multer
+# 类型定义
+pnpm add -D @types/multer
+```
+
+### ⚙️ 存储配置（diskStorage）
+
+```ts
+import { diskStorage } from 'multer';
+import { extname, join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
+
+// 磁盘存储策略：控制存到哪、文件名怎么起
+const storage = diskStorage({
+  destination(req, file, cb) {
+    // 目录不存在时自动递归创建
+    const uploadPath = join(process.cwd(), 'uploads');
+    if (!existsSync(uploadPath)) {
+      mkdirSync(uploadPath, { recursive: true });
+    }
+    cb(null, uploadPath);
+  },
+  filename(req, file, cb) {
+    // 生成唯一文件名：时间戳 + 随机数 + 原始扩展名，避免重名覆盖
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `${uniqueSuffix}${extname(file.originalname)}`);
+  },
+});
+```
+
+### 🗂️ 单文件上传
+
+```ts
+import { Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+
+// 字段名 'file' 对应前端 FormData 中的 key
+@Post('file')
+@UseInterceptors(FileInterceptor('file', { storage }))
+uploadFile(@UploadedFile() file: UploadedFile) {
+  return this.uploadService.saveFile(file);
+}
+```
+
+前端调用：
+
+```html
+<input type="file" name="file" />
+```
+
+```js
+const formData = new FormData();
+formData.append('file', fileInput.files[0]);
+await fetch('/upload/file', { method: 'POST', body: formData });
+```
+
+### 🗂️ 多文件上传
+
+```ts
+import { Post, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
+
+// 'files' 是字段名，10 是最大文件数量限制
+@Post('files')
+@UseInterceptors(FilesInterceptor('files', 10, { storage }))
+uploadFiles(@UploadedFiles() files: UploadedFile[]) {
+  return this.uploadService.saveFiles(files);
+}
+```
+
+前端调用：
+
+```html
+<input type="file" multiple name="files" />
+```
+
+```js
+const formData = new FormData();
+// 多个文件使用同一个字段名
+for (const file of fileInput.files) {
+  formData.append('files', file);
+}
+await fetch('/upload/files', { method: 'POST', body: formData });
+```
+
+### 🗂️ 多字段上传（不同字段各传不同文件）
+
+```ts
+import { Post, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
+
+// 适合表单中有多种不同用途文件的场景，比如头像 + 简历
+@Post('profile')
+@UseInterceptors(FileFieldsInterceptor([
+  { name: 'avatar', maxCount: 1 },
+  { name: 'documents', maxCount: 5 },
+], { storage }))
+uploadProfile(@UploadedFiles() files: {
+  avatar?: UploadedFile[];
+  documents?: UploadedFile[];
+}) {
+  return {
+    avatar: files.avatar?.[0],
+    documents: files.documents,
+  };
+}
+```
+
+### 三种拦截器速查
+
+| 拦截器 | 用途 | 参数装饰器 |
+| --- | --- | --- |
+| `FileInterceptor(fieldName, opts)` | 单文件 | `@UploadedFile()` |
+| `FilesInterceptor(fieldName, maxCount, opts)` | 同字段名多文件 | `@UploadedFiles()` |
+| `FileFieldsInterceptor(fields[], opts)` | 不同字段各传文件 | `@UploadedFiles()` |
+
+### 📄 文件对象字段说明
+
+上传成功后 `file` 对象包含以下字段：
+
+| 字段 | 说明 | 示例 |
+| --- | --- | --- |
+| `originalname` | 用户上传时的原始文件名 | `photo.jpg` |
+| `filename` | 存储到磁盘后的文件名 | `1716700000000-123456789.jpg` |
+| `path` | 文件完整磁盘路径 | `/app/uploads/1716700000000-123456789.jpg` |
+| `destination` | 存储目录 | `/app/uploads` |
+| `mimetype` | 文件 MIME 类型 | `image/jpeg` |
+| `size` | 文件大小（字节） | `204800` |
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：字段名对不上
+
+前端 `formData.append('avatar', file)` 但后端写的是 `FileInterceptor('file')`，结果 `@UploadedFile()` 拿到 `undefined`。**字段名必须严格一致**。
+
+#### 坑 2：多文件用了 `FileInterceptor`
+
+`FileInterceptor` 只处理单个文件。前端传了多个文件但后端用 `FileInterceptor`，只会接收到第一个。多文件必须用 `FilesInterceptor`。
+
+#### 坑 3：没做文件大小 / 类型校验
+
+生产环境务必限制上传大小和文件类型，防止恶意上传：
+
+```ts
+import { BadRequestException } from '@nestjs/common';
+
+// 在 storage 选项同级传入 limits 和 fileFilter
+const uploadOptions = {
+  storage,
+  // 限制单文件最大 5MB
+  limits: { fileSize: 5 * 1024 * 1024 },
+  // 只允许图片类型
+  fileFilter(req, file, cb) {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new BadRequestException('只允许上传图片文件'), false);
+    }
+    cb(null, true);
+  },
+};
+
+@UseInterceptors(FileInterceptor('file', uploadOptions))
+```
+
+#### 坑 4：uploads 目录被 git 提交
+
+在 `.gitignore` 中加上 `uploads/`，避免把用户上传的文件提交到仓库。
+
+### 怎么选？一句话决策
+
+- **一次只传一个文件** → `FileInterceptor`
+- **一次传多个、同一个字段** → `FilesInterceptor`，第二个参数控制数量上限
+- **表单有多种文件字段（头像 + 附件）** → `FileFieldsInterceptor`
+- **想存云端（OSS / S3）而非本地** → 自定义 storage engine 或在 Service 层拿到 buffer 后上传
+
 
 # websocket 篇
 

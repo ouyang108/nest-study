@@ -38,6 +38,11 @@ const router = createRouter({
       name: 'sse',
       component: () => import('../views/SseView.vue'),
     },
+    {
+      path: '/upload',
+      name: 'upload',
+      component: () => import('../views/UploadView.vue'),
+    },
   ],
 })
 

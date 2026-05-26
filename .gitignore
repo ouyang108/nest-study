@@ -21,6 +21,7 @@ node_modules
 .env.development
 # IDEs and editors
 /.idea
+uploads/
 .project
 .classpath
 .c9/

@@ -7,6 +7,7 @@ import { UserModule } from './modules/user/user.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { ChatioModule } from './modules/chatio/chatio.module';
 import { SseModule } from './modules/sse/sse.module';
+import { UploadModule } from './modules/upload/upload.module';
 
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import * as Joi from 'joi';
@@ -68,6 +69,7 @@ console.log('当前环境:', process.env.NODE_ENV); // 输出当前环境变量�
     ChatModule,
     ChatioModule,
     SseModule,
+    UploadModule,
     // PrismaModule,
   ],
   controllers: [AppController],

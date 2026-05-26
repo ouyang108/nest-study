@@ -13,6 +13,7 @@ import { RouterLink, RouterView } from 'vue-router'
     <RouterLink to="/native-ws">原生 WebSocket</RouterLink>
     <RouterLink to="/socket-io">Socket.IO</RouterLink>
     <RouterLink to="/sse">SSE</RouterLink>
+    <RouterLink to="/upload">文件上传</RouterLink>
   </nav>
 
   <!-- 路由出口：匹配到的页面会渲染到这里 -->
