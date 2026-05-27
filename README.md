@@ -1252,6 +1252,361 @@ const uploadOptions = {
 - **想存云端（OSS / S3）而非本地** → 自定义 storage engine 或在 Service 层拿到 buffer 后上传
 
 
+## JWT 认证
+
+> Nest 的 JWT 认证基于 [@nestjs/jwt](https://github.com/nestjs/jwt) + [@nestjs/passport](https://github.com/nestjs/passport) + [passport-jwt](https://github.com/mikenicholson/passport-jwt)。JwtModule 负责签发/验证 token，Passport 负责从请求头中解析 token 并挂载到 `request.user`。通常采用**全局守卫 + @Public() 豁免**模式：所有路由默认需要 token，登录/注册等路由用 `@Public()` 跳过即可。
+
+### 📦 安装依赖
+
+```bash
+pnpm add @nestjs/jwt @nestjs/passport passport passport-jwt
+pnpm add -D @types/passport-jwt
+```
+
+### ⚙️ 在 `app.module.ts` 中配置 ConfigModule 校验环境变量
+
+```ts
+// src/app.module.ts — Joi 校验部分
+import * as Joi from 'joi';
+
+ConfigModule.forRoot({
+  validationSchema: Joi.object({
+    JWT_SECRET: Joi.string().required(),
+  }),
+}),
+```
+
+`.env` 文件：
+
+```env
+JWT_SECRET=123456
+```
+
+### ⚙️ AuthModule：注册 JwtModule + 守卫
+
+```ts
+// src/modules/auth/auth.module.ts
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { ConfigService } from '@nestjs/config';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+import { JwtStrategy } from './jwt.strategy';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
+
+@Module({
+  imports: [
+    PassportModule,
+    // 异步注册：从 ConfigService 读取 JWT_SECRET，而非硬编码
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        secret: config.get<string>('JWT_SECRET'),
+        signOptions: { expiresIn: '7d' },
+      }),
+    }),
+  ],
+  controllers: [AuthController],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    // 全局守卫已注释，改用局部 @UseGuards(JwtAuthGuard) 按需加在 Controller 上
+    // { provide: APP_GUARD, useClass: JwtAuthGuard },
+  ],
+  // 导出 JwtModule，其他模块如需 JwtService 可直接 import AuthModule
+  exports: [JwtModule],
+})
+export class AuthModule {}
+```
+
+### 🧱 JwtStrategy：注册 Passport JWT 策略
+
+passport-jwt 的策略只有一个职责：**从 Bearer token 中解析出 payload 并返回值，之后挂到 `request.user` 上**。下面的 `secretOrKey` 必须和签发 token 时的 secret 一致。
+
+```ts
+// src/modules/auth/jwt.strategy.ts
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor(configService: ConfigService) {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ignoreExpiration: false,
+      // JWT_SECRET 已在 AppModule 的 Joi schema 中标记为 required，启动时必定存在
+      secretOrKey: configService.get<string>('JWT_SECRET')!,
+    });
+  }
+
+  // 验证通过后，返回值挂到 request.user
+  async validate(payload: { sub: number; email: string }) {
+    return { id: payload.sub, email: payload.email };
+  }
+}
+```
+
+### 🧱 JwtAuthGuard：全局守卫 + @Public() 豁免
+
+全局守卫默认拦截所有路由。通过 `Reflector` 读取路由元数据，遇到 `@Public()` 标记就放行，否则走 passport jwt 校验。
+
+```ts
+// src/modules/auth/guards/jwt-auth.guard.ts
+import { ExecutionContext, Injectable } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { AuthGuard } from '@nestjs/passport';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+
+@Injectable()
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  constructor(private reflector: Reflector) {
+    super();
+  }
+
+  canActivate(context: ExecutionContext) {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (isPublic) {
+      return true;
+    }
+    return super.canActivate(context);
+  }
+}
+```
+
+### 🧱 @Public() 装饰器：标记公开路由
+
+```ts
+// src/modules/auth/decorators/public.decorator.ts
+import { SetMetadata } from '@nestjs/common';
+
+export const IS_PUBLIC_KEY = 'isPublic';
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+```
+
+### 🧱 @CurrentUser() 装饰器：直接从 request.user 中提取当前用户
+
+不用在 controller 里手动 `req.user`，用参数装饰器一行注入。
+
+```ts
+// src/modules/auth/decorators/current-user.decorator.ts
+import { createParamDecorator, ExecutionContext } from '@nestjs/common';
+
+export const CurrentUser = createParamDecorator(
+  (data: unknown, ctx: ExecutionContext) => {
+    const request = ctx.switchToHttp().getRequest();
+    return request.user;
+  },
+);
+```
+
+Controller 中使用：
+
+```ts
+@Get()
+findAll(@CurrentUser() user: { id: number; email: string }) {
+  // user = { id: 1, email: 'admin@example.com' }
+  return this.catsService.findAll(user);
+}
+```
+
+### 🧱 AuthController：登录接口
+
+登录是获取 token 的唯一入口，必须加 `@Public()` 免守卫。
+
+```ts
+// src/modules/auth/auth.controller.ts
+import { Body, Controller, Post } from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { CreateAuthDto } from './dto/create-auth.dto';
+import { Public } from './decorators/public.decorator';
+
+@Controller('auth')
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Public()
+  @Post('login')
+  login(@Body() createAuthDto: CreateAuthDto) {
+    return this.authService.login(createAuthDto);
+  }
+}
+```
+
+### 🧱 AuthService：签发 token
+
+`jwtService.signAsync(payload)` 用 `JWT_SECRET` + 过期时间签发 JWT。`sub`（subject）是 JWT 注册声明中的常用字段，放用户 ID。
+
+```ts
+// src/modules/auth/auth.service.ts
+import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { CreateAuthDto } from './dto/create-auth.dto';
+
+@Injectable()
+export class AuthService {
+  constructor(private readonly jwtService: JwtService) {}
+
+  async login(createAuthDto: CreateAuthDto) {
+    // WHY: 先写死一个固定用户演示流程，接入数据库后替换为按账号查询
+    const user = { id: 1, email: 'admin@example.com' };
+
+    if (!user) {
+      throw new UnauthorizedException('账号或密码错误');
+    }
+
+    // sub 是 JWT 标准字段，存用户 ID；validate 中从 sub 还原当前用户
+    const payload = { sub: user.id, email: user.email };
+
+    return {
+      data: {
+        access_token: await this.jwtService.signAsync(payload),
+      },
+    };
+  }
+}
+```
+
+### 🔁 完整请求流程
+
+```
+1. POST /auth/login               → body: { username, password }
+2. AuthService.login() 校验用户    → jwtService.signAsync({ sub: 1, email: '...' })
+3. 返回 { data: { access_token } } → 前端存到 localStorage/sessionStorage
+4. GET /cats Authorization: Bearer <token>
+5. JwtAuthGuard → JwtStrategy.validate() → 解析出 { id, email } 挂到 request.user
+6. Controller 通过 @CurrentUser() 拿到当前用户
+```
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：没加 `@Public()` 导致登录接口 401（仅全局守卫模式）
+
+使用 `APP_GUARD` 全局模式时，登录接口不加 `@Public()` 会直接返回 401。**如果用局部 `@UseGuards()` 模式，没贴守卫的路由天然公开，不存在这个问题。**
+
+#### 坑 2：secret 不一致
+
+`JwtModule.registerAsync` 中签发的 `secret` 和 `JwtStrategy` 中 `super()` 传入的 `secretOrKey` 必须是同一个值。一个常见的错误是签发用了环境变量，策略里又写了一个新的。
+
+#### 坑 3：Bearer 前缀没写或写错
+
+前端请求头必须是 `Authorization: Bearer <token>`，不能省略 `Bearer ` 前缀（注意有个空格）。`ExtractJwt.fromAuthHeaderAsBearerToken()` 只认 `Bearer` 开头的 token。
+
+#### 坑 4：token 过期却查不到原因
+
+`signOptions.expiresIn` 是字符串格式，写 `'7d'` 表示 7 天，**不要写成数字**（`expiresIn: 7` 表示 7 秒）。测试时建议先写短一点（如 `'30m'`）快速验证过期逻辑。
+
+### 🏗️ 全局守卫 vs 局部守卫：两种架构选择
+
+JwtAuthGuard 可以用**全局**或**局部**两种方式生效，分别适合不同场景。
+
+#### 方式一：全局守卫
+
+通过 `APP_GUARD` 注入令牌把守卫注册为全局，所有路由默认需要 token，登录等公开接口用 `@Public()` 豁免。**当前项目已注释掉此方式，改用方式二的局部守卫。**
+
+```ts
+// auth.module.ts
+import { APP_GUARD } from '@nestjs/core';
+
+@Module({
+  providers: [
+    AuthService,
+    JwtStrategy,
+    // APP_GUARD 是 NestJS 内置注入令牌，任何以它注册的守卫自动应用到所有路由
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+  ],
+})
+export class AuthModule {}
+```
+
+```ts
+// 公开路由上加 @Public() 跳过校验
+@Public()
+@Post('login')
+login() {}
+```
+
+**适合：大多数接口需要认证，只有少数开放。**
+
+#### 方式二：局部守卫（去掉全局，当前项目采用）
+
+如果只是个别接口需要认证，删掉 `APP_GUARD`，改用 `@UseGuards()` 按需贴在需要的路由或 Controller 上。
+
+**① 在 auth.module.ts 中注释或删掉 APP_GUARD：**
+
+```ts
+// src/modules/auth/auth.module.ts —— 注释掉全局守卫
+@Module({
+  providers: [
+    AuthService,
+    JwtStrategy,
+    // 全局注册 JWT 守卫，所有路由默认需要 token 校验
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: JwtAuthGuard,
+    // },
+  ],
+})
+export class AuthModule {}
+```
+
+**② 在需要认证的 Controller 上加 `@UseGuards(JwtAuthGuard)`：**
+
+```ts
+// src/modules/cats/cats.controller.ts —— 局部守卫实战案例
+import { UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+
+@Controller('cats')
+@UseGuards(JwtAuthGuard) // 整个 Controller 都需要带 token 才能访问
+export class CatsController {
+  constructor(private readonly catsService: CatsService) {}
+
+  @Post()
+  create(@Body() createCatDto: CreateCatDto) {
+    return this.catsService.create(createCatDto);
+  }
+
+  @Get()
+  findAll(@CurrentUser() user: { id: number; email: string }) {
+    // user 就是 JwtStrategy.validate() 解析出来的当前登录用户 { id, email }
+    return this.catsService.findAll(user);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.catsService.findOne(+id);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() updateCatDto: UpdateCatDto) {
+    return this.catsService.update(+id, updateCatDto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.catsService.remove(+id);
+  }
+}
+```
+
+> `@UseGuards(JwtAuthGuard)` 也可以只挂在单个路由上（`@UseGuards(...)` 写在 `@Get()` 下方），适合只有个别路由需要认证的场景。
+
+**适合：大部分接口公开，只有少数需要登录。**
+
+#### 怎么选？一句话决策
+
+- **所有接口默认需要登录** → `APP_GUARD` + `@Public()` 白名单模式（方式一）
+- **只有个别接口需要登录** → 删掉 `APP_GUARD`，用 `@UseGuards()` 按需加（方式二）
+- **需要区分角色（admin / user）** → 在 jwt payload 中加 `role` 字段，配合 `@Roles('admin')` 装饰器 + RolesGuard 做权限判断
+
+
 # websocket 篇
 
 > Nest 的 WebSocket 支持有两套适配器：**原生 ws**（`@nestjs/platform-ws`，轻量、协议透明）和 **Socket.IO**（`@nestjs/platform-socket.io`，自带房间 / 自动重连 / ack / 命名空间等能力）。本章按两个模块分别展开，按需选用。

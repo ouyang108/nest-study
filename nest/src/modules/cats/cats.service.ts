@@ -25,14 +25,13 @@ export class CatsService {
     return 'This action adds a new cat';
   }
 
-  async findAll() {
+  async findAll(user: { id: number; email: string }) {
     try {
-      // 抛出错误
-      // throw new HttpException('这是局部错误过滤器', 400);
+      console.log('当前用户:', user); // 输出当前登录用户信息
       // 示例：调用 UserService 的方法
       const users = this.userService.findAll();
-      const message = this.configService.get<string>('PORT'); // 从配置服务中获取 JWT_SECRET 的值
-      const DATABASE_URL = this.configService.get<string>('DATABASE_URL'); // 从配置服务中获取 JWT_SECRET 的值
+      const message = this.configService.get<string>('PORT'); // 从配置服务中获取 PORT 的值
+      const DATABASE_URL = this.configService.get<string>('DATABASE_URL'); // 从配置服务中获取 DATABASE_URL 的值
       const xyz_shared_key_123 =
         this.configService.get<string>('xyz_shared_key_123'); // 从配置服务中获取 xyz_shared_key_123 的值
       // 查找user表的所有数据
@@ -40,6 +39,7 @@ export class CatsService {
       return {
         data: {
           msg: `This action returns all cats`,
+          currentUser: user,
           users,
           message,
           DATABASE_URL,

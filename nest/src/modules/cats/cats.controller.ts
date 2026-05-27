@@ -8,6 +8,7 @@ import {
   Delete,
   UseFilters,
   UseInterceptors,
+  UseGuards,
 } from '@nestjs/common';
 import { CatsService } from './cats.service';
 import { CreateCatDto } from './dto/create-cat.dto';
@@ -19,6 +20,8 @@ import {
   CacheKey, // 自定义缓存 key（不写则用 URL）
   CacheTTL, // 单独设置 ttl，毫秒
 } from '@nestjs/cache-manager';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 // 局部过滤器
 @UseFilters(localErrorFilter) //
 // 或者 这两种写法都行 推荐用@UseFilters(localErrorFilter)
@@ -29,6 +32,7 @@ import {
 // 缓存拦截器：命中走缓存，未命中走服务层
 @UseInterceptors(CacheInterceptor)
 @Controller('cats')
+@UseGuards(JwtAuthGuard)
 export class CatsController {
   constructor(private readonly catsService: CatsService) {}
 
@@ -41,8 +45,9 @@ export class CatsController {
   // 单独设置 ttl，毫秒
   @CacheTTL(60 * 1000)
   @Get()
-  findAll() {
-    return this.catsService.findAll();
+  findAll(@CurrentUser() user: { id: number; email: string }) {
+    // user 就是 JWT 解析出来的当前登录用户 { id, email }
+    return this.catsService.findAll(user);
   }
 
   @CacheKey('catId') // 这里的 key 是全局的，和 URL 无关；如果不写 @CacheKey，则默认用 URL 作为 key
