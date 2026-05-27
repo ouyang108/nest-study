@@ -11,7 +11,7 @@
 
 ### NestJS 篇 · 待补充章节
 
-- [ ] **Guards 守卫** — 认证/鉴权核心机制，JWT + Passport 集成
+- [x] **Guards 守卫** — 认证/鉴权核心机制，JWT + Passport 集成
 - [ ] **自定义装饰器** — `createParamDecorator` 提取用户信息等
 - [ ] **Pipes 管道** — 自定义管道（ParseIntPipe、自定义转换）
 - [ ] **Swagger/OpenAPI** — 接口文档自动生成

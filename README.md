@@ -1483,6 +1483,118 @@ export class AuthService {
 6. Controller 通过 @CurrentUser() 拿到当前用户
 ```
 
+### 🍪 Cookie 认证：httpOnly 方式
+
+上面的流程是前端把 token 存 `localStorage`，每次请求手动拼 `Authorization` 头。但 `localStorage` 能被任何 JS 代码读到，存在 XSS 风险。**httpOnly cookie** 是更安全的方案——浏览器自动携带，JS 无法读取。
+
+#### 登录时签发 httpOnly cookie
+
+在 `AuthService.login()` 中，除了返回 token 到响应体，还通过 `res.cookie()` 写入一个 httpOnly cookie：
+
+```ts
+// auth.service.ts
+res.cookie('access_token', accessToken, {
+  httpOnly: true,  // JS 读不到，防 XSS
+  secure: false,   // 生产环境必须 true（仅 HTTPS 传输）
+  sameSite: 'none', // 前后端分离时需设为 'none'，配合 secure: true
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 天
+});
+```
+
+设置后浏览器收到响应会自动存储这个 cookie，后续所有同源请求都会自动带上。
+
+#### cookie-parser：解析前端发来的 cookie
+
+前端后续请求会自动带上 `Cookie: access_token=eyJhbGci...`。后端需要 `cookie-parser` 中间件来解析：
+
+```ts
+// main.ts
+import cookieParser from 'cookie-parser';
+
+app.use(cookieParser()); // 把 Cookie 字符串解析成 req.cookies 对象
+```
+
+安装依赖（已装）：
+
+```bash
+pnpm add cookie-parser
+pnpm add -D @types/cookie-parser
+```
+
+#### JwtStrategy：同时从 cookie 和 header 取 token
+
+改 `jwtFromRequest`，用 `ExtractJwt.fromExtractors` 组合两种提取方式——cookie 优先，header 回退：
+
+```ts
+// jwt.strategy.ts
+import type { Request } from 'express';
+
+jwtFromRequest: ExtractJwt.fromExtractors([
+  // 方式一：从 cookie 提取（浏览器场景，自动携带）
+  (req: Request): string | null => req?.cookies?.access_token ?? null,
+  // 方式二：从 Authorization header 提取（移动端 / 非浏览器场景）
+  ExtractJwt.fromAuthHeaderAsBearerToken(),
+]),
+```
+
+这样同一个接口既支持浏览器（cookie 自动带 token），也支持 Postman / 移动端（手动拼 header）。
+
+#### 在 Service 中读取 cookie 和 token
+
+通过 `@Inject(REQUEST)` 注入请求对象，就能在任何 service 里拿到原始 cookie 和 token：
+
+```ts
+// cats.service.ts
+import { Inject, Injectable } from '@nestjs/common';
+import { REQUEST } from '@nestjs/core';
+import type { Request } from 'express';
+
+@Injectable()
+export class CatsService {
+  constructor(
+    @Inject(REQUEST) private readonly request: Request,
+  ) {}
+
+  async findAll(user: { id: number; email: string }) {
+    // 打印所有 cookie
+    console.log('前端 cookies:', this.request.cookies);
+    // 打印 access_token
+    const cookies = this.request.cookies as Record<string, string> | undefined;
+    console.log('cookie 中的 access_token:', cookies?.access_token);
+    // 打印 Authorization 请求头
+    console.log('请求头 Authorization:', this.request.headers.authorization);
+
+    // user 仍然是 JWT 解析后的用户信息 { id, email }
+    console.log('当前用户:', user);
+  }
+}
+```
+
+#### 🔁 Cookie 认证流程
+
+```
+1. POST /auth/login                    → AuthService 签发 JWT，写入 httpOnly cookie
+2. 浏览器自动存储 cookie（JS 不可见）
+3. GET /cats                           → 浏览器自动带 Cookie: access_token=<token>
+4. cookie-parser 中间件                → 解析 Cookie 字符串为 req.cookies 对象
+5. JwtAuthGuard → JwtStrategy          → ExtractJwt 优先从 cookie 取，header 回退
+6. 验签通过 → request.user = { id, email }
+7. Controller @CurrentUser() 拿到用户信息
+8. Service 可通过 @Inject(REQUEST) 拿原始 cookie / token
+```
+
+#### 🆚 cookie vs header 方案对比
+
+| | httpOnly Cookie | Authorization Header |
+|---|---|---|
+| 防 XSS | ✅ JS 读不到 | ❌ localStorage 可被 XSS 窃取 |
+| 防 CSRF | ⚠️ 需配合 sameSite | ✅ 天然免疫 |
+| 前端改动 | 零改动（浏览器自动） | 需要手动加请求头 |
+| 移动端 / 非浏览器 | ❌ 不适用 | ✅ 通用 |
+| 跨域 | 需 sameSite=None + secure | 无额外限制 |
+
+**当前项目采用双模式兼容：cookie 优先 + header 回退**，一个接口同时覆盖浏览器和非浏览器场景。
+
 ### 🕳️ 几个常见的坑
 
 #### 坑 1：没加 `@Public()` 导致登录接口 401（仅全局守卫模式）

@@ -29,14 +29,18 @@ import { InterceptorExceptionFilter } from './exception/error-exception.filter';
 // ws
 import { WsAdapter } from '@nestjs/platform-ws';
 
+// cookie解析
+// WHY: 默认导入能让 @types/cookie-parser 暴露的函数签名被 ESLint 正确识别，避免 no-unsafe-call 误报。
+import cookieParser from 'cookie-parser';
 // socket.io
 // import { IoAdapter } from '@nestjs/platform-socket.io';
 async function bootstrap() {
   // 创建 Nest 应用实例
   const app = await NestFactory.create(AppModule);
+
   // 跨域
   app.enableCors();
-
+  app.use(cookieParser());
   // WHY: 必须把 app 实例传给 WsAdapter，让它复用 HTTP 服务的端口（process.env.PORT）
   // 不传的话 WsAdapter 不会挂到 HTTP server 上，gateway 又没指定 port，ws 服务就「没绑端口」连不上
   // app.useWebSocketAdapter(new WsAdapter(app));

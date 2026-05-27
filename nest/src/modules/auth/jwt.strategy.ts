@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
+import type { Request } from 'express';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
 /**
@@ -34,7 +35,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // 最后一个参数（verify callback）由 PassportStrategy 自动注入，不需要手动传
     super({
       // jwtFromRequest: 指定 token 从哪里取，这里从请求头 Authorization: Bearer <token> 提取
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        // 方式一：从 cookie 提取
+        (req: Request): string | null => {
+          // cookies 来自 cookie-parser，Express 默认类型里是 any，这里收窄后再读取避免 unsafe-return
+          const cookies = req.cookies as Partial<Record<string, unknown>>;
+          const token = cookies.access_token;
+
+          // 只接受字符串 token，避免把非字符串值交给 JWT 解析器
+          return typeof token === 'string' ? token : null;
+        },
+        // 方式二：从 Authorization header 提取（回退方案）
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+      ]),
       // ignoreExpiration: false 表示不忽略过期时间，token 过期直接拒绝
       ignoreExpiration: false,
       // secretOrKey: 验证 token 签名的密钥，必须和签发时（AuthService 中 signAsync）用的是同一把

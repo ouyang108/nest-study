@@ -1,4 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { REQUEST } from '@nestjs/core';
+import type { Request } from 'express';
 import { CreateCatDto } from './dto/create-cat.dto';
 import { UpdateCatDto } from './dto/update-cat.dto';
 // 引入 UserService 类型，用于依赖注入（路径已更新到 modules/ 下）
@@ -16,6 +18,8 @@ export class CatsService {
     private readonly configService: ConfigService,
     private readonly primas: PrismaService,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    // WHY: 注入当前 HTTP 请求对象，以便在 service 中直接读取 cookie 和原始 token
+    @Inject(REQUEST) private readonly request: Request,
   ) {}
 
   create(createCatDto: CreateCatDto) {
@@ -28,6 +32,17 @@ export class CatsService {
   async findAll(user: { id: number; email: string }) {
     try {
       console.log('当前用户:', user); // 输出当前登录用户信息
+
+      // 打印前端发来的 cookie
+      // WHY: cookies 来自 cookie-parser，Express 默认类型是 any，收窄后再使用
+      const cookies = this.request.cookies as
+        | Record<string, string>
+        | undefined;
+      console.log('前端 cookies:', cookies);
+      console.log('cookie 中的 access_token:', cookies?.access_token);
+      // 打印 Authorization 请求头中的 token（备用提取方式）
+      const tokenFromHeader = this.request.headers.authorization;
+      console.log('请求头中的 Authorization:', tokenFromHeader);
       // 示例：调用 UserService 的方法
       const users = this.userService.findAll();
       const message = this.configService.get<string>('PORT'); // 从配置服务中获取 PORT 的值
