@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Bash(Get-ChildItem -Path \"e:\\\\daima\\\\gitee\\\\nest-study\\\\nest\\\\src\\\\modules\\\\auth\" -Recurse)"
+      "Bash(Get-ChildItem -Path \"e:\\\\daima\\\\gitee\\\\nest-study\\\\nest\\\\src\\\\modules\\\\auth\" -Recurse)",
+      "Bash(node -e \"try { require.resolve\\('sharp'\\); console.log\\('sharp installed'\\) } catch\\(e\\) { console.log\\('sharp not installed'\\) }\")"
     ]
   }
 }

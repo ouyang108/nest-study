@@ -1719,6 +1719,367 @@ export class CatsController {
 - **需要区分角色（admin / user）** → 在 jwt payload 中加 `role` 字段，配合 `@Roles('admin')` 装饰器 + RolesGuard 做权限判断
 
 
+## 定时任务
+
+> Nest 的定时任务基于 [@nestjs/schedule](https://docs.nestjs.com/techniques/task-scheduling)，支持三种定时方式：`@Cron`（Cron 表达式）、`@Interval`（固定间隔）、`@Timeout`（延时一次）。底层依赖 [node-cron](https://github.com/kelektiv/node-cron) 解析表达式，`setInterval`/`setTimeout` 处理间隔和超时。
+
+### 📦 安装依赖
+
+```bash
+pnpm add @nestjs/schedule
+```
+
+### ⚙️ 在 `app.module.ts` 中注册
+
+```ts
+// src/app.module.ts
+import { ScheduleModule } from '@nestjs/schedule';
+
+@Module({
+  imports: [
+    ScheduleModule.forRoot(), // 注册定时任务模块
+  ],
+})
+export class AppModule {}
+```
+
+### 🧱 三种定时方式
+
+#### 方式一：`@Cron` — Cron 表达式（最灵活）
+
+```ts
+// src/modules/task/task.controller.ts
+import { Cron } from '@nestjs/schedule';
+
+@Controller('task')
+export class TaskController {
+  @Cron('45 * * * * *') // 每分钟第45秒执行
+  handleCron() {
+    console.log('定时任务执行了');
+  }
+}
+```
+
+#### 方式二：`@Interval` — 固定间隔（最简单）
+
+```ts
+import { Interval } from '@nestjs/schedule';
+
+@Controller('task')
+export class TaskController {
+  @Interval(10000) // 每10秒执行一次
+  handleInterval() {
+    console.log('Interval 定时任务执行了');
+  }
+}
+```
+
+#### 方式三：`@Timeout` — 延时一次（启动后执行一次）
+
+```ts
+import { Timeout } from '@nestjs/schedule';
+
+@Controller('task')
+export class TaskController {
+  @Timeout(5000) // 应用启动5秒后执行一次
+  handleTimeout() {
+    console.log('Timeout 定时任务执行了');
+  }
+}
+```
+
+### 🕐 Cron 表达式详解
+
+`@nestjs/schedule` 使用 **6 位** Cron 表达式（比 Linux 标准多一位秒）：
+
+```
+秒 分 时 日 月 周
+*  *  *  *  *  *
+```
+
+| 表达式 | 含义 |
+| --- | --- |
+| `'45 * * * * *'` | 每分钟第45秒 |
+| `'0 */5 * * * *'` | 每5分钟 |
+| `'0 0 9 * * 1-5'` | 工作日早9点 |
+| `'0 0 0 1 * *'` | 每月1号零点 |
+| `'0 30 18 * * 5'` | 每周五18:30 |
+
+#### 通配符说明
+
+| 符号 | 含义 | 示例 |
+| --- | --- | --- |
+| `*` | 任意值 | `* * * * * *` 每秒 |
+| `1,15` | 枚举值 | `0 0 9,18 * * *` 每天9点和18点 |
+| `1-5` | 范围 | `0 0 9 * * 1-5` 周一到周五9点 |
+| `*/5` | 步长 | `0 */10 * * * *` 每10分钟 |
+| `45` | 精确值 | `45 * * * * *` 每分钟第45秒 |
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：忘记 `ScheduleModule.forRoot()`
+
+没在 `AppModule` 的 `imports` 中注册 `ScheduleModule.forRoot()`，`@Cron` / `@Interval` / `@Timeout` 都不会生效，控制台也没有报错提示。
+
+#### 坑 2：Cron 表达式写了 5 位而不是 6 位
+
+Linux 标准的 cron 是 5 位（`分 时 日 月 周`），但 `@nestjs/schedule` 的 `@Cron` 是 **6 位**，最前面多了 `秒`：
+
+```ts
+// ❌ 5 位 — 不会生效
+@Cron('0 9 * * 1-5')
+
+// ✅ 6 位
+@Cron('0 0 9 * * 1-5')
+```
+
+#### 坑 3：把 `@Cron` 放在没有被注册的类上
+
+装饰器必须放在被 Nest DI 容器管理的类（Controller / Service / Provider）中才能生效。如果放在一个普通的没有被 `@Injectable()` 装饰且没有在 `providers` 中注册的类上，定时任务不会执行。
+
+#### 坑 4：动态任务无法用装饰器
+
+`@Cron` / `@Interval` 的表达式在编译时就固定了，无法在运行时动态调整。如果需要动态增删改定时任务，需要用 `SchedulerRegistry` 手动管理：
+
+```ts
+import { SchedulerRegistry } from '@nestjs/schedule';
+
+@Injectable()
+export class DynamicTaskService {
+  constructor(private schedulerRegistry: SchedulerRegistry) {}
+
+  addCronJob(name: string, cronExpression: string) {
+    const job = new CronJob(cronExpression, () => {
+      console.log('动态定时任务执行');
+    });
+    this.schedulerRegistry.addCronJob(name, job);
+    job.start();
+  }
+
+  deleteCronJob(name: string) {
+    this.schedulerRegistry.deleteCronJob(name);
+  }
+}
+```
+
+### 怎么选？一句话决策
+
+- **固定时间点执行（如每天9点发日报）** → `@Cron`
+- **固定间隔执行（如每10秒检查一次状态）** → `@Interval`
+- **启动后延时执行一次（如预热缓存）** → `@Timeout`
+- **在运行时动态增删改定时任务** → `SchedulerRegistry`
+
+
+## 队列（BullMQ 异步任务处理）
+
+> 定时任务适合固定时间点执行，但如果任务**耗时长**（加水印、发邮件、导出报表）或**需要失败重试**，就应该丢到队列里异步执行。队列让接口秒回，任务后台慢慢跑。Nest 基于 [@nestjs/bullmq](https://docs.nestjs.com/techniques/queues) 封装了 [BullMQ](https://docs.bullmq.io/)，底层依赖 Redis 做消息持久化。
+
+### 为什么要用队列
+
+| 场景 | 定时任务 `@Cron` | 队列 BullMQ |
+|------|----------------|-------------|
+| 上传后加水印 | ❌ 轮询扫描，文件多了性能差 | ✅ 上传完直接丢任务 |
+| 发送验证码邮件 | ❌ 接口要等发完才返回 | ✅ 丢队列秒回，后台发 |
+| 导出 1 万条 Excel | ❌ 请求超时 | ✅ 后台导出，完了通知用户 |
+| 任务失败需要重试 | ❌ 自己写重试逻辑 | ✅ `attempts` 配置即可 |
+
+### 📦 安装依赖
+
+```bash
+pnpm add @nestjs/bullmq bullmq
+```
+
+### ⚙️ 在 `app.module.ts` 中注册
+
+```ts
+// src/app.module.ts
+import { BullModule } from '@nestjs/bullmq';
+
+@Module({
+  imports: [
+    // 第一步：连接 Redis（队列数据存储）
+    BullModule.forRoot({
+      connection: {
+        host: 'localhost',
+        port: 6379,
+      },
+    }),
+    // 第二步：注册队列（告诉 BullMQ 有哪些队列）
+    BullModule.registerQueue({
+      name: 'task-queue',
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+### 🧱 生产者 — 往队列丢任务
+
+生产者可以在 Controller 或 Service 中注入队列，调用 `add()` 把任务丢进去：
+
+```ts
+// src/modules/upload/upload.service.ts
+import { Injectable } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+
+@Injectable()
+export class UploadService {
+  // 注入队列实例 — Service 自己持有，不需要 Controller 透传
+  constructor(
+    @InjectQueue('task-queue') private readonly watermarkQueue: Queue,
+  ) {}
+
+  async saveFile(file: UploadedFile) {
+    // ...校验逻辑...
+
+    // 把加水印任务丢到队列，不阻塞上传接口的响应
+    await this.watermarkQueue.add('watermark', {
+      filename: file.filename,
+      path: file.path,
+    });
+
+    return { message: '上传成功，水印后台处理中' };
+  }
+}
+```
+
+```ts
+// src/modules/upload/upload.controller.ts
+@Controller('upload')
+export class UploadController {
+  constructor(private readonly uploadService: UploadService) {}
+
+  @Post('file')
+  @UseInterceptors(FileInterceptor('file', { storage }))
+  uploadFile(@UploadedFile() file: UploadedFile) {
+    // Controller 只管接收请求，队列由 Service 处理
+    return this.uploadService.saveFile(file);
+  }
+}
+```
+
+### 🧱 消费者 — 从队列取任务执行
+
+消费者用 `@Processor('队列名')` 标记，`process()` 方法每收到一个任务就自动执行：
+
+```ts
+// src/modules/upload/watermark.processor.ts
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Job } from 'bullmq';
+import sharp from 'sharp';
+import { basename, dirname, extname, join } from 'path';
+
+// 生成右下角水印 SVG（sharp 不支持直接写文字，通过 composite SVG 实现）
+function createWatermarkSvg(text: string, width: number, height: number): Buffer {
+  const svg = `
+    <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+      <text x="${width - 30}" y="${height - 30}" font-size="48"
+            fill="rgba(255,255,255,0.6)" text-anchor="end"
+            font-family="Microsoft YaHei, Arial, sans-serif">
+        ${text}
+      </text>
+    </svg>`;
+  return Buffer.from(svg);
+}
+
+@Processor('task-queue')
+export class WatermarkProcessor extends WorkerHost {
+  async process(job: Job<{ filename: string; path: string }, any, string>) {
+    const { filename, path: filePath } = job.data;
+
+    // 输出文件名：原名_watermark.ext
+    const ext = extname(filename);
+    const name = basename(filename, ext);
+    const outputPath = join(dirname(filePath), `${name}_watermark${ext}`);
+
+    // 读原图尺寸 → 生成 SVG → composite 叠加
+    const { width = 1920, height = 1080 } = await sharp(filePath).metadata();
+    const watermarkSvg = createWatermarkSvg('Nest Study', width, height);
+
+    await sharp(filePath)
+      .composite([{ input: watermarkSvg, top: 0, left: 0 }])
+      .toFile(outputPath);
+  }
+}
+```
+
+### 🧱 在模块中注册消费者
+
+消费者虽然 `@Processor()` 内部自带了 `@Injectable()`，但**仍然需要放进 `providers`**，否则 Nest 不知道它的存在：
+
+```ts
+// src/modules/upload/upload.module.ts
+import { BullModule } from '@nestjs/bullmq';
+import { WatermarkProcessor } from './watermark.processor';
+
+@Module({
+  imports: [BullModule.registerQueue({ name: 'task-queue' })],
+  controllers: [UploadController],
+  providers: [UploadService, WatermarkProcessor], // 消费者必须注册！
+})
+export class UploadModule {}
+```
+
+### 🔁 完整流程
+
+```
+用户上传图片 → Controller 接收 → Service 保存文件 + add() 丢任务到 Redis
+                                    ↓
+        接口立即返回（不等待水印完成）
+                                    ↓
+    WatermarkProcessor 从 Redis 取出任务 → sharp 加水印 → 输出 _watermark 文件
+```
+
+### 🔧 任务高级配置
+
+`add()` 第三个参数控制重试、延迟、优先级等：
+
+```ts
+await this.watermarkQueue.add('watermark', data, {
+  delay: 1000,                              // 延迟 1 秒执行
+  attempts: 3,                              // 失败后最多重试 3 次
+  backoff: { type: 'fixed', delay: 5000 },  // 每次重试间隔 5 秒
+  priority: 1,                              // 优先级（数字越小优先级越高）
+  removeOnComplete: true,                   // 完成后自动删除（避免 Redis 内存泄漏）
+  removeOnFail: 50,                         // 保留最近 50 条失败记录
+});
+```
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：消费者没放进 `providers`
+
+`@Processor('xxx')` 虽然自带 `@Injectable()`，但 Nest **不做自动扫描**。忘记加 `providers`，队列里任务堆积但永远没人消费。
+
+#### 坑 2：`@InjectQueue()` 名字对不上
+
+Controller/Service 里 `@InjectQueue('task-queue')` 和 `BullModule.registerQueue({ name: 'task-queue' })`、`@Processor('task-queue')` 三处名字必须完全一致。
+
+#### 坑 3：忘记开启 Redis
+
+BullMQ 依赖 Redis 存储任务数据。Redis 没启动时，`add()` 会报 `connect ECONNREFUSED`。
+
+#### 坑 4：`addJob` 是 protected 方法
+
+```ts
+// ❌ addJob 是 Queue 内部的 protected 方法，外部不能调
+await queue.addJob('xxx', data);
+// ✅ 用 add() 公开方法
+await queue.add('xxx', data);
+```
+
+#### 坑 5：任务完成后 Redis 内存越来越大
+
+默认情况下，已完成的任务记录会一直保留在 Redis 里。生产环境务必加 `removeOnComplete: true` 或设置全局清理策略。
+
+### 怎么选？一句话决策
+
+- **固定时间点跑（如日报、清理过期数据）** → `@Cron` 定时任务
+- **请求触发的异步操作（加水印、发邮件、导出）** → BullMQ 队列
+- **定时任务耗时长 / 需要重试** → `@Cron` 触发 `add()`，实际处理丢给队列
+
+
 # websocket 篇
 
 > Nest 的 WebSocket 支持有两套适配器：**原生 ws**（`@nestjs/platform-ws`，轻量、协议透明）和 **Socket.IO**（`@nestjs/platform-socket.io`，自带房间 / 自动重连 / ack / 命名空间等能力）。本章按两个模块分别展开，按需选用。

@@ -15,8 +15,8 @@
 - [ ] **自定义装饰器** — `createParamDecorator` 提取用户信息等
 - [ ] **Pipes 管道** — 自定义管道（ParseIntPipe、自定义转换）
 - [ ] **Swagger/OpenAPI** — 接口文档自动生成
-- [ ] **定时任务** — `@nestjs/schedule`，Cron 表达式
-- [ ] **队列** — `@nestjs/bullmq`，异步任务处理
+- [x] **定时任务** — `@nestjs/schedule`，Cron 表达式
+- [x] **队列** — `@nestjs/bullmq`，异步任务处理
 - [ ] **日志** — 内置 Logger / 集成 Winston、Pino
 - [ ] **API 版本控制** — URI / Header / Media Type 三种策略
 - [ ] **限流 Rate Limiting** — `@nestjs/throttler` 防刷
