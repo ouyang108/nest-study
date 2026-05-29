@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { REQUEST } from '@nestjs/core';
 import type { Request } from 'express';
 import { CreateCatDto } from './dto/create-cat.dto';
@@ -11,6 +11,8 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 @Injectable()
 export class CatsService {
+  private readonly logger = new Logger(CatsService.name);
+
   // 通过构造函数注入 UserService
   // Nest 会自动从 CatsModule 的 imports（UserModule 导出的 providers）里找到并注入实例
   constructor(
@@ -32,6 +34,7 @@ export class CatsService {
   async findAll(user: { id: number; email: string }) {
     try {
       console.log('当前用户:', user); // 输出当前登录用户信息
+      this.logger.error('测试错误日志 — 当前用户:', user);
 
       // 打印前端发来的 cookie
       // WHY: cookies 来自 cookie-parser，Express 默认类型是 any，收窄后再使用

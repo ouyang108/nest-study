@@ -22,15 +22,16 @@ import {
 } from '@nestjs/cache-manager';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { Public } from '../auth/decorators/public.decorator';
 // 局部过滤器
 @UseFilters(localErrorFilter) //
 // 或者 这两种写法都行 推荐用@UseFilters(localErrorFilter)
 // @UseFilters(new localErrorFilter())
-
+@Public()
 // 局部拦截器
 @UseInterceptors(LocalExceptionFilter) // 这里可以放局部拦截器，例如 @UseInterceptors(LocalInterceptor)，如果没有局部拦截器，可以直接写 @UseInterceptors() 或者干脆不写
 // 缓存拦截器：命中走缓存，未命中走服务层
-@UseInterceptors(CacheInterceptor)
+// @UseInterceptors(CacheInterceptor)
 @Controller('cats')
 @UseGuards(JwtAuthGuard)
 export class CatsController {

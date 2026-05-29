@@ -2080,6 +2080,121 @@ await queue.add('xxx', data);
 - **定时任务耗时长 / 需要重试** → `@Cron` 触发 `add()`，实际处理丢给队列
 
 
+## Winston 日志（nest-winston + winston-daily-rotate-file）
+
+> 用 Winston 接管 NestJS 默认日志，支持控制台美化 + 按天滚动落盘 + 错误日志分离。
+
+### 📦 安装依赖
+
+```bash
+pnpm add nest-winston winston winston-daily-rotate-file
+```
+
+| 包名 | 作用 |
+| --- | --- |
+| `winston` | 日志核心库，支持多 transport、日志级别、格式化 |
+| `nest-winston` | NestJS 适配层，提供 `WinstonModule` 和 `nestLike` 格式 |
+| `winston-daily-rotate-file` | 按天自动切分日志文件，支持压缩和自动清理 |
+
+### ⚙️ 日志配置文件（[nest/src/winston/index.ts](nest/src/winston/index.ts)）
+
+```ts
+import { WinstonModule, utilities as nestWinstonUtilities } from 'nest-winston';
+import * as winston from 'winston';
+import 'winston-daily-rotate-file';
+
+const winstonLogger = {
+  logger: WinstonModule.createLogger({
+    transports: [
+      // 控制台打印 — 开发环境用 nestLike 格式，带颜色和时间戳
+      new winston.transports.Console({
+        format: winston.format.combine(
+          winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+          winston.format.ms(),
+          nestWinstonUtilities.format.nestLike('JKVideo', {
+            colors: true,
+            prettyPrint: true,
+          }),
+        ),
+      }),
+
+      // 按天滚动 — 常规日志写入 logs/app-yyyy-mm-dd.log
+      new winston.transports.DailyRotateFile({
+        dirname: join(process.cwd(), 'logs'),
+        filename: 'app-%DATE%.log',
+        datePattern: 'YYYY-MM-DD',
+        zippedArchive: true,    // 旧日志自动压缩为 .gz
+        maxSize: '20m',         // 单文件超过 20MB 自动切分
+        maxFiles: '14d',        // 只保留最近 14 天
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          winston.format.json(), // 落盘用 JSON，方便接入 ELK / Grafana 等
+        ),
+      }),
+
+      // 错误日志分离 — 只记录 error 级别，存入 errors-yyyy-mm-dd.log
+      new winston.transports.DailyRotateFile({
+        dirname: join(process.cwd(), 'logs'),
+        filename: 'errors-%DATE%.log',
+        datePattern: 'YYYY-MM-DD',
+        level: 'error',          // 只抓 error 级别
+        zippedArchive: true,
+        maxSize: '20m',
+        maxFiles: '30d',         // 错误日志多保留一些，30 天
+        format: winston.format.combine(
+          winston.format.timestamp(),
+          winston.format.json(),
+        ),
+      }),
+    ],
+  }),
+};
+export { winstonLogger };
+```
+
+### ⚙️ 在 `main.ts` 中替换默认 Logger
+
+```ts
+import { winstonLogger } from './winston';
+
+const app = await NestFactory.create(AppModule, {
+  logger: winstonLogger.logger, // 用 Winston 替换 NestJS 默认 Logger
+});
+```
+
+### 🗂️ 三种 transport 的分工
+
+| Transport | 目标 | 级别 | 格式 | 保留策略 |
+| --- | --- | --- | --- | --- |
+| `Console` | 开发调试 | 全部 | nestLike 彩色 | 不落盘 |
+| `DailyRotateFile` (app) | 常规日志归档 | 全部 | JSON | 14 天 |
+| `DailyRotateFile` (errors) | 错误追踪 | `error` only | JSON | 30 天 |
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：`logs/` 目录被 git 提交
+
+在 `.gitignore` 中加上 `logs/`，否则日志文件会被提交到仓库。
+
+#### 坑 2：用了 Winston 后 `Logger` 注入还是 Nest 默认的
+
+如果代码中用 `@Inject(Logger)` 或 `new Logger()`，拿到的是 Nest 默认 Logger 而非 Winston。需要注入时，建议通过 `app.get()` 获取 Winston 实例，或者在模块层用自定义 provider 覆盖。
+
+#### 坑 3：生产环境控制台也开了 nestLike 格式
+
+`nestLike` 格式带 ANSI 颜色码，输出到 Docker / K8s 日志收集时可能变成乱码。生产环境建议关闭 `colors` 或直接移除 Console transport。
+
+#### 坑 4：`maxFiles` 到期后日志没自动删除
+
+`winston-daily-rotate-file` 只在**新日志写入前**才检查并清理过期文件。如果应用长期没有日志输出，旧文件不会被主动清理。
+
+### 怎么选？一句话决策
+
+- **开发环境看日志** → Console transport 的 `nestLike` 格式，带颜色、带时间戳
+- **生产环境查历史** → DailyRotateFile，JSON 格式落盘，方便 grep / ELK 检索
+- **线上排错** → 单独切出 `errors-%DATE%.log`，只看 error 级别，不受普通日志噪音干扰
+
+
 # websocket 篇
 
 > Nest 的 WebSocket 支持有两套适配器：**原生 ws**（`@nestjs/platform-ws`，轻量、协议透明）和 **Socket.IO**（`@nestjs/platform-socket.io`，自带房间 / 自动重连 / ack / 命名空间等能力）。本章按两个模块分别展开，按需选用。
