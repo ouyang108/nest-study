@@ -9,6 +9,7 @@ import {
   UseFilters,
   UseInterceptors,
   UseGuards,
+  Version,
 } from '@nestjs/common';
 import { CatsService } from './cats.service';
 import { CreateCatDto } from './dto/create-cat.dto';
@@ -46,6 +47,7 @@ export class CatsController {
   // 单独设置 ttl，毫秒
   @CacheTTL(60 * 1000)
   @Get()
+  @Version('2')
   findAll(@CurrentUser() user: { id: number; email: string }) {
     // user 就是 JWT 解析出来的当前登录用户 { id, email }
     return this.catsService.findAll(user);

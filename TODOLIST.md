@@ -18,7 +18,7 @@
 - [x] **定时任务** — `@nestjs/schedule`，Cron 表达式
 - [x] **队列** — `@nestjs/bullmq`，异步任务处理
 - [x] **日志** — 内置 Logger / 集成 Winston、Pino
-- [ ] **API 版本控制** — URI / Header / Media Type 三种策略
+- [x] **API 版本控制** — URI / Header / Media Type 三种策略
 - [ ] **限流 Rate Limiting** — `@nestjs/throttler` 防刷
 - [ ] **生命周期钩子** — `onModuleInit`、`onApplicationBootstrap` 等
 - [ ] **单元测试 / E2E 测试** — Jest + `@nestjs/testing`

@@ -2195,6 +2195,94 @@ const app = await NestFactory.create(AppModule, {
 - **线上排错** → 单独切出 `errors-%DATE%.log`，只看 error 级别，不受普通日志噪音干扰
 
 
+## API 版本控制（VersioningType）
+
+> 当接口需要做不兼容变更时，同时保留新旧两版让客户端按自己的节奏迁移，避免"一上线就炸"。
+
+### 三种版本策略
+
+| 策略 | 版本放哪 | 示例 | 适用场景 |
+| --- | --- | --- | --- |
+| `VersioningType.URI` | URL 路径 | `/v1/cats`、`/v2/cats` | **工业界推荐**，直观、好调试、网关友好 |
+| `VersioningType.HEADER` | 请求头 | `Accept-Version: 1` | 适合 REST 纯净主义者，不污染 URL |
+| `VersioningType.MEDIA_TYPE` | Accept 头 | `Accept: application/json;v=2` | 适合内容协商场景，实现最复杂 |
+
+### ⚙️ 在 `main.ts` 中全局开启
+
+```ts
+import { VersioningType } from '@nestjs/common';
+
+// 在 bootstrap() 中，NestFactory.create 之后
+const app = await NestFactory.create(AppModule, winstonLogger);
+
+// 开启 URI 版本策略（工业界推荐方案）
+app.enableVersioning({
+  type: VersioningType.URI,
+  defaultVersion: '1', // 不写版本的请求默认走 v1
+});
+```
+
+配置后，访问地址变为 `http://localhost:3000/v1/cats`。
+
+### 🧱 在 Controller 中使用 `@Version()` 标记
+
+```ts
+import { Controller, Get, Version } from '@nestjs/common';
+
+@Controller('cats')
+export class CatsController {
+  // 不写 @Version → 走 defaultVersion '1'，即 /v1/cats
+  @Post()
+  create(@Body() createCatDto: CreateCatDto) { ... }
+
+  // 显式声明 v2 → 只有 /v2/cats 能访问
+  @Get()
+  @Version('2')
+  findAll() { ... }
+
+  // 没写 @Version → 走默认 v1，即 /v1/cats/:id
+  @Get(':id')
+  findOne(@Param('id') id: string) { ... }
+}
+```
+
+### 🔁 请求路径对照
+
+| Controller 方法 | 有无 `@Version()` | 可访问路径 |
+| --- | --- | --- |
+| `create` | 无 | `POST /v1/cats` |
+| `findAll` | `@Version('2')` | `GET /v2/cats` |
+| `findOne` | 无 | `GET /v1/cats/:id` |
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：路由里写死 `/v1/xxx`
+
+开了 `enableVersioning` 后，`@Controller('v1/cats')` 和 URI 策略会叠加成 `/v1/v1/cats`。Nest 会自动在路径前加版本前缀，**Controller 装饰器里不要再手写版本号**。
+
+#### 坑 2：`@Version('2')` 是字符串 `'2'`，不是数字
+
+写 `@Version(2)` 会报类型错误。装饰器接受的是 `string`，必须写成 `@Version('2')`。
+
+#### 坑 3：defaultVersion 和 @Version 的覆盖关系
+
+`defaultVersion: '1'` 只对**没写 `@Version()` 的方法**生效。如果方法上写了 `@Version('3')`，那这个方法就**只在 v3 下可用**，v1 反而访问不到。
+
+#### 坑 4：前端 / 网关没更新路由规则
+
+后端开了版本隔离后，前端仍然请求 `/cats`（不带版本号）→ 框架会自动映射到 defaultVersion `v1`，看似正常。但 `@Version('2')` 的接口不再响应旧路径，需要前端配合切换到 `/v2/cats`。
+
+#### 坑 5：版本粒度理解错误
+
+你可能想"只给 `/cats` 加版本，`/dogs` 不加"。但 `app.enableVersioning()` 是**全局**的，所有 controller 都会被版本前缀控制。如果只想要局部版本，可以改用 `@Controller({ path: 'cats', version: '1' })` 的 controller 级别声明。
+
+### 怎么选？一句话决策
+
+- **绝大多数项目** → URI 策略，最直观、最省事
+- **需要"同一 URL 根据请求头返回不同版本"** → HEADER 策略
+- **对接第三方 API 规范** → 参考对方标准，通常也是 URI
+
+
 # websocket 篇
 
 > Nest 的 WebSocket 支持有两套适配器：**原生 ws**（`@nestjs/platform-ws`，轻量、协议透明）和 **Socket.IO**（`@nestjs/platform-socket.io`，自带房间 / 自动重连 / ack / 命名空间等能力）。本章按两个模块分别展开，按需选用。
