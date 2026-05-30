@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ai-study": {
+      "command": "npx",
+      "args": ["tsx", "E:\\daima\\gitee\\ai-study\\03.mcp.ts"],
+      "cwd": "E:\\daima\\gitee\\ai-study"
+    }
+  }
+}

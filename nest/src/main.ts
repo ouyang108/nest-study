@@ -37,8 +37,8 @@ import cookieParser from 'cookie-parser';
 
 // winston 日志配置
 import { winstonLogger } from './winston';
-
 import 'winston-daily-rotate-file'; // 引入 daily-rotate-file 插件，用于按天滚动日志文件
+
 async function bootstrap() {
   // 创建 Nest 应用实例
   const app = await NestFactory.create(AppModule, winstonLogger);

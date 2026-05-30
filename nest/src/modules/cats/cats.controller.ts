@@ -24,6 +24,7 @@ import {
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Public } from '../auth/decorators/public.decorator';
+import { SkipThrottle } from '@nestjs/throttler';
 // 局部过滤器
 @UseFilters(localErrorFilter) //
 // 或者 这两种写法都行 推荐用@UseFilters(localErrorFilter)
@@ -48,6 +49,8 @@ export class CatsController {
   @CacheTTL(60 * 1000)
   @Get()
   @Version('2')
+  // 跳过所有命名限流器（global + sensitive），必须显式列出名字，因为 @SkipThrottle() 默认只跳过 'default'
+  @SkipThrottle({ global: true, sensitive: true })
   findAll(@CurrentUser() user: { id: number; email: string }) {
     // user 就是 JWT 解析出来的当前登录用户 { id, email }
     return this.catsService.findAll(user);

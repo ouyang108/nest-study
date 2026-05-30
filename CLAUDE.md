@@ -2,6 +2,8 @@
 
 ## README.md 编辑读取策略
 
+README.md 位于项目根目录：`e:\daima\gitee\nest-study\README.md`（不是 `nest/` 子目录下的）。
+
 README.md 已 1300+ 行，编辑时**不要大段读全文**，避免浪费 token。
 
 ### 硬性约束

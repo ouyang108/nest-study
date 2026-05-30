@@ -2283,6 +2283,128 @@ export class CatsController {
 - **对接第三方 API 规范** → 参考对方标准，通常也是 URI
 
 
+## 限流（@nestjs/throttler）
+
+### 📦 安装依赖
+
+```bash
+pnpm add @nestjs/throttler
+```
+
+### ⚙️ 在 `app.module.ts` 中注册命名限流器
+
+项目使用**命名限流器**（named throttlers），区分普通路由和敏感路由：
+
+```ts
+// nest/src/app.module.ts
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
+
+@Module({
+  imports: [
+    ThrottlerModule.forRoot([
+      {
+        name: 'global',     // 命名限流器：全局普通路由
+        limit: 100,
+        ttl: 60000,         // 60 秒内最多 100 次请求
+      },
+      {
+        name: 'sensitive',  // 命名限流器：敏感操作（登录等）
+        limit: 5,
+        ttl: 60000,         // 1 分钟内最多 5 次请求
+      },
+    ]),
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,  // 全局启用限流守卫
+    },
+  ],
+})
+export class AppModule {}
+```
+
+### 🧱 在 Controller 中使用
+
+**引用命名限流器（不覆盖 limit/ttl，用模块默认值）**：
+
+```ts
+// nest/src/modules/auth/auth.controller.ts
+import { Throttle } from '@nestjs/throttler';
+
+@Controller('auth')
+export class AuthController {
+  // 登录接口使用 sensitive 限流（5 次/分钟），
+  // 传空对象 {} 表示不覆盖 limit/ttl，继承 app.module 的默认值
+  @Throttle({ sensitive: {} })
+  @Post('login')
+  login(@Body() createAuthDto: CreateAuthDto) {
+    return this.authService.login(createAuthDto);
+  }
+}
+```
+
+**跳过限流**：
+
+```ts
+// nest/src/modules/cats/cats.controller.ts
+import { SkipThrottle } from '@nestjs/throttler';
+
+@Controller('cats')
+export class CatsController {
+  // 查询接口不需要限流，跳过所有命名限流器
+  @SkipThrottle({ global: true, sensitive: true })
+  @Get()
+  findAll() {
+    return this.catsService.findAll();
+  }
+}
+```
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：`@SkipThrottle()` 无参不生效
+
+`@SkipThrottle()` 不传参时默认值是 `{ default: true }`，只跳过名字叫 `default` 的限流器。你用的是命名限流器（`global` / `sensitive`），名字对不上，skip 永远不生效。
+
+```ts
+// ❌ 不生效 — 只跳过 'default'，你没有叫 default 的 throttler
+@SkipThrottle()
+
+// ✅ 必须显式列出名字
+@SkipThrottle({ global: true, sensitive: true })
+```
+
+> **根因**：`@SkipThrottle()` 源码 `const SkipThrottle = (skip = { default: true }) => {...}`，guard 里查的是 `THROTTLER_SKIP:global` / `THROTTLER_SKIP:sensitive`，`default` 永远匹配不上。
+
+#### 坑 2：`@Throttle({ sensitive: true })` 类型不对
+
+`@Throttle()` 接收 `Record<string, { limit, ttl }>`，不是 `boolean`。如果你想引用某个命名限流器但不覆盖配置，传空对象 `{}`：
+
+```ts
+// ❌ 类型错误，true 不是合法的 ThrottlerLimit
+@Throttle({ sensitive: true })
+
+// ✅ 空对象 = 使用模块默认配置
+@Throttle({ sensitive: {} })
+```
+
+> **原理**：guard 里 `routeOrClassLimit || namedThrottler.limit`，空对象的 `.limit` 是 `undefined`，自动回退到模块默认值。
+
+#### 坑 3：多个命名限流器都会生效
+
+`ThrottlerModule.forRoot([...])` 里定义的**所有**命名限流器都会在每个请求上逐一执行，取最严格的那个。比如 `global`（100/min）+ `sensitive`（5/min）同时存在时，实际限制是 5/min。
+
+如果你只想让 `sensitive` 在特定路由生效，需要给其他路由加 `@SkipThrottle({ sensitive: true })`，只跳过 sensitive 这一个。
+
+### 怎么选？一句话决策
+
+- **普通接口不需要限流** → `@SkipThrottle({ global: true, sensitive: true })`
+- **登录等敏感接口要严格限制** → `@Throttle({ sensitive: {} })`（用模块默认的 5/min）
+- **有特殊需求覆盖默认值** → `@Throttle({ global: { limit: 200, ttl: 30000 } })`
+
+
 # websocket 篇
 
 > Nest 的 WebSocket 支持有两套适配器：**原生 ws**（`@nestjs/platform-ws`，轻量、协议透明）和 **Socket.IO**（`@nestjs/platform-socket.io`，自带房间 / 自动重连 / ack / 命名空间等能力）。本章按两个模块分别展开，按需选用。
