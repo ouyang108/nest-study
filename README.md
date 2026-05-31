@@ -2405,6 +2405,124 @@ export class CatsController {
 - **有特殊需求覆盖默认值** → `@Throttle({ global: { limit: 200, ttl: 30000 } })`
 
 
+## Swagger/OpenAPI — 接口文档自动生成
+
+### 📦 安装依赖
+
+```bash
+pnpm add @nestjs/swagger swagger-ui-express
+```
+
+| 包 | 作用 |
+|---|---|
+| `@nestjs/swagger` | NestJS 的 Swagger 装饰器 + 文档生成（`SwaggerModule.createDocument`） |
+| `swagger-ui-express` | 把生成的 OpenAPI JSON 渲染成 Swagger UI 可视化页面 |
+
+### ⚙️ 在 `main.ts` 中配置 DocumentBuilder
+
+```ts
+// nest/src/main.ts
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+
+const config = new DocumentBuilder()
+  .setTitle('🎬 JKVideo 娱乐影音系统')
+  .setDescription('集成全链路实时通讯、异步队列、JWT 的全栈底座')
+  .setVersion('1.0.0')
+  .addBearerAuth() // 让文档支持一键填入 JWT Token 鉴权测试
+  .build();
+
+const document = SwaggerModule.createDocument(app, config);
+SwaggerModule.setup('docs', app, document); // 访问 http://localhost:3000/docs
+```
+
+`.addBearerAuth()` 是黄金配置：Swagger UI 右上角会出现 "Authorize" 按钮，填一次 JWT token 后，所有需要鉴权的接口都会自动带 `Authorization: Bearer <token>` 请求头。
+
+### 🧱 nest-cli.json 插件配置（自动版 `@ApiProperty()`）
+
+```json
+// nest/nest-cli.json → compilerOptions.plugins
+{
+  "compilerOptions": {
+    "builder": "tsc",
+    "plugins": [
+      {
+        "name": "@nestjs/swagger",
+        "options": {
+          "classValidatorShim": true,
+          "dtoFileNameSuffix": [".dto.ts", ".entity.ts"]
+        }
+      }
+    ]
+  }
+}
+```
+
+这个插件会在编译时自动给 DTO 字段补上 `@ApiProperty()` 元数据，`classValidatorShim: true` 让它从 `class-validator` 装饰器推断字段属性：
+
+| `class-validator` 装饰器 | 插件自动推断的 Swagger 属性 |
+|---|---|
+| `@IsEmail()` | `format: 'email'` |
+| `@IsNotEmpty()` | `required: true` |
+| `@IsOptional()` | `required: false` |
+| `@MinLength(6)` | `minLength: 6` |
+
+### 🧱 在 DTO 中手写 `@ApiProperty()`（推荐：插件当兜底）
+
+插件只能推断类型/必填，**不能推断字段含义**。想要文档可读性好，关键字段还是要手写：
+
+```ts
+// nest/src/modules/user/dto/create-user.dto.ts
+import { IsEmail, IsNotEmpty } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+
+export class CreateUserDto {
+  @ApiProperty({ description: '邮箱', example: 'user@example.com' })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({ description: '密码', example: '123456' })
+  @IsNotEmpty()
+  password: string;
+
+  @ApiProperty({ description: '确认密码', example: '123456' })
+  @IsNotEmpty()
+  confirmPassword: string;
+}
+```
+
+> **插件 + 手写的关系**：手写了 `@ApiProperty()` 的字段，插件会**自动跳过**，不会覆盖你填的 `description` / `example`。没手写的字段，插件兜底补上基础属性。两者不冲突。
+
+### 🕳️ 几个常见的坑
+
+#### 坑 1：nest-cli.json 配了插件，但文档里还是没有字段
+
+NestJS 10+ 默认编译器换成了 **SWC**，SWC 不支持插件。你的 `compilerOptions.plugins` 写得再对也会被**静默跳过**。
+
+```json
+// ❌ 插件不生效：没写 builder，默认用 swc
+{ "compilerOptions": { "plugins": [...] } }
+
+// ✅ 必须显式指定 tsc 编译器
+{ "compilerOptions": { "builder": "tsc", "plugins": [...] } }
+```
+
+> **验证方式**：`nest build` 后看控制台有没有 `[@nestjs/swagger]` 开头的日志输出，有就说明插件生效了。
+
+#### 坑 2：写完 DTO 后 Swagger 文档没刷新
+
+`classValidatorShim` 插件只在**编译阶段**运行，写完 DTO 后需要**重启** dev server（`nest start --watch` 模式下改 src 文件会触发自动重启，但有时候缓存没清干净，手动 `nest build && nest start` 更稳）。
+
+#### 坑 3：DTO 没被 Controller 的 `@Body()` 引用，插件不会处理它
+
+插件只会扫描被 Controller 方法参数类型引用的 DTO。如果你的 DTO 只被 Service 内部使用、或者只是 export 了但没在任何 Controller 的 `@Body()` / `@Query()` 里出现，插件看不到它，不会生成文档。
+
+### 怎么选？一句话决策
+
+- **快速原型、字段不多** → 纯插件 `classValidatorShim`，一行 `@ApiProperty()` 都不写
+- **正式项目、需要文档可读** → 手写 `@ApiProperty({ description, example })` + 插件当兜底
+- **插件不生效排查** → 先确认 `nest-cli.json` 里有 `"builder": "tsc"`
+
+
 # websocket 篇
 
 > Nest 的 WebSocket 支持有两套适配器：**原生 ws**（`@nestjs/platform-ws`，轻量、协议透明）和 **Socket.IO**（`@nestjs/platform-socket.io`，自带房间 / 自动重连 / ack / 命名空间等能力）。本章按两个模块分别展开，按需选用。

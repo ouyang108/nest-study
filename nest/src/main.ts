@@ -39,9 +39,29 @@ import cookieParser from 'cookie-parser';
 import { winstonLogger } from './winston';
 import 'winston-daily-rotate-file'; // 引入 daily-rotate-file 插件，用于按天滚动日志文件
 
+// swagger 文档配置
+import { SwaggerModule } from '@nestjs/swagger';
+import { DocumentBuilder } from '@nestjs/swagger';
 async function bootstrap() {
   // 创建 Nest 应用实例
   const app = await NestFactory.create(AppModule, winstonLogger);
+
+  //  swagger
+  // 🌟 核心：构建 Swagger 文档的基础元数据面板
+  const config = new DocumentBuilder()
+    .setTitle('🎬 JKVideo 娱乐影音系统 — 企业级企业后端 API 脑图')
+    .setDescription(
+      '集成全链路实时通讯(Socket.io)、异步队列加水印(BullMQ)、双通道权限控制(JWT)的满血版全栈底座',
+    )
+    .setVersion('1.0.0') // 系统版本
+    .addBearerAuth() // 🚨 黄金配置：让文档支持一键人肉塞入 JWT Token 进行加密鉴权测试！
+    .build();
+
+  // 创建文档对象
+  const document = SwaggerModule.createDocument(app, config);
+
+  // 🌟 强行映射：规定访问 http://localhost:3000/docs 的时候就能看到网页版文档
+  SwaggerModule.setup('docs', app, document);
 
   // 🌟 选项 A：开启【URI 策略】（工业界推荐方案 👍）
   app.enableVersioning({
